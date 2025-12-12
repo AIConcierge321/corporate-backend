@@ -6,10 +6,16 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://user:pass@localhost:5432/corporate_travel"
+    DATABASE_URL: str = "postgresql+asyncpg://user:pass@localhost:5435/corporate_travel"
     
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://localhost:6385/0"
+
+    # Security
+    SECRET_KEY: str = "changethis-secret-key-in-production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.api.v1.endpoints import health
-from app.services.redis_client import RedisService
+from app.api.v1.api import api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -17,7 +16,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.include_router(health.router, prefix=settings.API_V1_STR, tags=["Health"])
+app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 async def root():

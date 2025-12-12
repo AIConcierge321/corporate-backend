@@ -14,6 +14,8 @@ sys.path.append(os.getcwd())
 
 from app.core.config import settings
 from app.db.base import Base
+# Import all models to register them with Base
+from app import models
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
