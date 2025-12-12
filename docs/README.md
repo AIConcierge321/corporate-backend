@@ -214,32 +214,29 @@ This platform revolutionizes corporate travel management by:
 
 #### 1. Clone repository
 ```bash
-git clone https://github.com/yourorg/corporate-travel.git
-cd corporate-travel
+git clone https://github.com/AIConcierge321/corporate-backend.git
+cd corporate-backend
 ```
 
 #### 2. Backend setup
 ```bash
 cd backend
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# Install uv (if not installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install dependencies
-pip install -r requirements.txt
+uv sync
 
 # Start database & Redis via Docker
-docker-compose up -d postgres redis
+# Note: Ports mapped to 5435 and 6385 to avoid conflicts
+docker compose up -d
 
 # Run migrations
-alembic upgrade head
-
-# Seed initial data
-python scripts/seed_db.py
+uv run alembic upgrade head
 
 # Start API server
-uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 **Backend will be available at:** `http://localhost:8000`  
