@@ -1,31 +1,28 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 
 class Token(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None
-    type: Optional[str] = None
+    email: Optional[str] = None
+    groups: List[str] = []
 
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+class SSOCallbackRequest(BaseModel):
+    id_token: str # OIDC ID Token from Okta/Azure/Google
+    provider: str
 
-class UserCreate(UserLogin):
-    full_name: str
-    org_id: Optional[str] = None # In real app, might register org first
-
-class UserResponse(BaseModel):
+class EmployeeResponse(BaseModel):
+    id: int
     email: EmailStr
     full_name: str
-    role: str
-    is_active: bool
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    status: str
+    external_user_id: Optional[str] = None
     
     class Config:
         from_attributes = True
-
-class RefreshRequest(BaseModel):
-    refresh_token: str

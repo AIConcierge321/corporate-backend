@@ -1,95 +1,57 @@
-from datetime import timedelta
-from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.db.session import get_db
+from app.schemas.auth import SSOCallbackRequest, Token, EmployeeResponse
+from app.models.employee import Employee
+from app.core import config
 from app.services import auth_service
-from app.schemas.auth import Token, UserCreate, UserResponse, RefreshRequest
-from app.core import security
-from app.core.config import settings
 from app.api import deps
-from jose import jwt, JWTError
+from typing import Any
 
 router = APIRouter()
 
-@router.post("/register", response_model=UserResponse)
-async def register(
-    user_in: UserCreate,
+@router.post("/sso/callback", response_model=Token)
+async def sso_callback(
+    sso_in: SSOCallbackRequest,
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
-    Register a new user.
+    Exchange ID Token from IdP for internal Access Token.
+    1. Validate ID Token (Signature, Issuer, Aud) - Mocked for now.
+    2. Lookup user by email/external_id in DB (Mirrored via SCIM).
+    3. If user exists & active -> Issue internal JWT.
+    4. If user missing -> Deny (Deny-by-default, SCIM must provision first).
     """
-    user = await auth_service.register_user_db(db, user_in)
-    return user
-
-@router.post("/login", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """
-    OAuth2 compatible token login, get an access token for future requests.
-    """
-    user = await auth_service.authenticate_user(db, form_data.username, form_data.password)
+    # TODO: Real OIDC Validation
+    # payload = verify_oidc_token(sso_in.id_token)
+    
+    # Mock Validation
+    email = "alice@corporate.com" # Extract from token
+    external_id = "okta_123"   # Extract from token
+    
+    # Check DB
+    result = await db.execute(select(Employee).where(Employee.email == email))
+    user = result.scalars().first()
+    
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
+            status_code=401, 
+            detail="User not provisioned. Please contact IT."
         )
-    elif not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    
-    return await auth_service.create_tokens(user.id)
-
-@router.post("/refresh", response_model=Token)
-async def refresh_token(
-    refresh_in: RefreshRequest,
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """
-    Get new access token using refresh token.
-    """
-    try:
-        payload = jwt.decode(
-            refresh_in.refresh_token, 
-            settings.SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
-        )
-        token_type = payload.get("type")
-        if token_type != "refresh":
-            raise HTTPException(status_code=400, detail="Invalid token type")
         
-        user_id = payload.get("sub")
-        # Check blacklist
-        if await auth_service.is_token_blacklisted(refresh_in.refresh_token):
-             raise HTTPException(status_code=400, detail="Token revoked")
-             
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid token")
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail="User is suspended")
 
-    return await auth_service.create_tokens(user_id)
+    # Issue Internal Token
+    access_token = auth_service.create_internal_token(user)
+    return Token(access_token=access_token, token_type="bearer")
 
-@router.post("/logout")
-async def logout(
-    token: str = Depends(deps.oauth2_scheme),
-    refresh_in: RefreshRequest = None
-):
-    """
-    Logout user (blacklist tokens).
-    Pass access token in Header, and optionally refresh token in body to blacklist both.
-    """
-    await auth_service.blacklist_token(token)
-    if refresh_in:
-        await auth_service.blacklist_token(refresh_in.refresh_token)
-    return {"message": "Successfully logged out"}
-
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=EmployeeResponse)
 async def read_users_me(
-    current_user: UserResponse = Depends(deps.get_current_active_user),
+    current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
-    Get current user.
+    Get current user profile (synced from IdP).
     """
     return current_user

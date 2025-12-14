@@ -1,2 +1,3 @@
 from .organization import Organization
-from .employee import Employee
+from .employee import Employee, DirectoryGroup
+
