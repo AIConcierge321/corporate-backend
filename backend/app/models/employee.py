@@ -59,4 +59,10 @@ class Employee(Base):
     # Relationships
     organization: Mapped["Organization"] = relationship(back_populates="employees")
     groups: Mapped[List["DirectoryGroup"]] = relationship(secondary=employee_groups, back_populates="members")
-    # bookings: Mapped[List["Booking"]] = relationship(back_populates="employee")
+    
+    # User as the BOOKER (bookings they created)
+    bookings: Mapped[List["Booking"]] = relationship("Booking", foreign_keys="Booking.booker_id", back_populates="booker")
+    
+    # User as the TRAVELER (trips they are going on)
+    # travelers relationship in Booking is defined as secondary, so we can access it here if needed or just query via Booking
+

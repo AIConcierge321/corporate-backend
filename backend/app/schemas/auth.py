@@ -24,5 +24,8 @@ class EmployeeResponse(BaseModel):
     status: str
     external_user_id: Optional[str] = None
     
+    groups: List[str] = []
+    permissions: List[str] = []
+    
     class Config:
         from_attributes = True

@@ -7,6 +7,7 @@ from app.models.employee import Employee
 from app.core import config
 from app.services import auth_service
 from app.api import deps
+from app.core.permissions import get_permissions_for_groups
 from typing import Any
 
 router = APIRouter()
@@ -52,6 +53,22 @@ async def read_users_me(
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
-    Get current user profile (synced from IdP).
+    Get current user profile with permissions.
     """
-    return current_user
+    # Ensure groups are loaded (lazy loading might require explicit join in deps)
+    group_names = [g.name for g in current_user.groups]
+    permissions = get_permissions_for_groups(group_names)
+    
+    # We construct the response manually to inject permissions, 
+    # relying on Pydantic to map the rest from the ORM object
+    return EmployeeResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        first_name=current_user.first_name,
+        last_name=current_user.last_name,
+        status=current_user.status,
+        external_user_id=current_user.external_user_id,
+        groups=group_names,
+        permissions=list(permissions)
+    )

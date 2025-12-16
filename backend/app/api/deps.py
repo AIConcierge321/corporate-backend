@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.employee import Employee
@@ -30,8 +31,12 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
     
-    # Fetch User
-    result = await db.execute(select(Employee).where(Employee.id == int(user_id)))
+    # Fetch User with Groups
+    result = await db.execute(
+        select(Employee)
+        .options(selectinload(Employee.groups))
+        .where(Employee.id == int(user_id))
+    )
     user = result.scalars().first()
     
     if user is None:
