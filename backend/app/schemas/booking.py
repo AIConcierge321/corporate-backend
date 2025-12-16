@@ -9,9 +9,14 @@ class BookingBase(BaseModel):
 class BookingCreate(BookingBase):
     traveler_ids: List[int] # Who are we booking for?
 
+from app.models.booking import BookingStatus, PolicyStatus
+
 class BookingResponse(BookingBase):
     id: UUID
-    status: str
+    status: BookingStatus
+    policy_status: Optional[PolicyStatus] = None
+    approval_required: bool = False
+    
     booker_id: int
     traveler_ids: List[int]
     created_at: datetime

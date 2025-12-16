@@ -9,7 +9,7 @@ from app.api import deps
 from app.api.auth_deps import require_permissions
 from app.core.permissions import Permissions
 from app.db.session import get_db
-from app.models.booking import Booking
+from app.models.booking import Booking, BookingTraveler, BookingStatus
 from app.models.employee import Employee
 from app.schemas.booking import BookingCreate, BookingResponse
 from app.services.booking_service import get_bookable_employees
@@ -51,12 +51,20 @@ async def create_booking_draft(
         raise HTTPException(status_code=404, detail="One or more travelers not found.")
 
     # 3. Create Draft
+    from app.models.booking import BookingTraveler, TravelerRole
+    
+    # Assume first traveler is Primary (or logic based on booker)
+    assoc_travelers = []
+    for idx, t in enumerate(travelers):
+        role = TravelerRole.PRIMARY if idx == 0 else TravelerRole.ADDITIONAL
+        assoc_travelers.append(BookingTraveler(employee_id=t.id, role=role))
+    
     booking = Booking(
         org_id=current_user.org_id,
         booker_id=current_user.id,
-        status="draft",
+        status="draft", # String literal works if Enum maps correctly, but better use Enum
         trip_name=booking_in.trip_name,
-        travelers=travelers
+        travelers_association=assoc_travelers
     )
     db.add(booking)
     await db.commit()
@@ -67,7 +75,7 @@ async def create_booking_draft(
         id=booking.id,
         status=booking.status,
         booker_id=booking.booker_id,
-        traveler_ids=[t.id for t in travelers],
+        traveler_ids=[t.id for t in travelers], # Use local var
         created_at=booking.created_at,
         trip_name=booking.trip_name
     )
@@ -119,3 +127,48 @@ async def get_booking(
          raise HTTPException(status_code=404, detail="Booking not found")
 
     return booking
+
+@router.post("/{booking_id}/submit", response_model=BookingResponse)
+async def submit_booking(
+    booking_id: uuid.UUID,
+    current_user: Employee = Depends(deps.get_current_user), # Any employee? Should check ownership
+    db: AsyncSession = Depends(get_db)
+) -> Any:
+    """
+    Submit a draft booking for approval/confirmation.
+    Runs Policy Engine -> Updates State.
+    """
+    # 1. Fetch Booking
+    stmt = select(Booking).options(selectinload(Booking.travelers_association).joinedload(BookingTraveler.employee)).where(Booking.id == booking_id)
+    result = await db.execute(stmt)
+    booking = result.scalars().first()
+    
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+        
+    if booking.booker_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to submit this booking")
+        
+    # 2. Run Policy Rules
+    # travel_objs = [assoc.employee for assoc in booking.travelers_association]
+    # Need to load actual employee objects. 
+    # Logic above does joinedload(BookingTraveler.employee)
+    
+    travelers_list = [assoc.employee for assoc in booking.travelers_association]
+    
+    from app.services.policy_engine import PolicyEngine
+    policy_result = PolicyEngine.evaluate(booking, travelers_list)
+    
+    # 3. State Machine Transition
+    from app.services.booking_workflow import BookingStateMachine
+    updated_booking = await BookingStateMachine.submit_draft(db, booking, policy_result)
+    
+    # 4. Construct response
+    return BookingResponse(
+        id=updated_booking.id,
+        status=updated_booking.status,
+        booker_id=updated_booking.booker_id,
+        traveler_ids=[t.id for t in travelers_list],
+        created_at=updated_booking.created_at,
+        trip_name=updated_booking.trip_name
+    )

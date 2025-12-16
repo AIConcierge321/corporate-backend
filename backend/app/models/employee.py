@@ -63,6 +63,11 @@ class Employee(Base):
     # User as the BOOKER (bookings they created)
     bookings: Mapped[List["Booking"]] = relationship("Booking", foreign_keys="Booking.booker_id", back_populates="booker")
     
+    # Manager / Hierarchy
+    manager_id: Mapped[Optional[int]] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    manager: Mapped[Optional["Employee"]] = relationship("Employee", remote_side="[Employee.id]", back_populates="subordinates")
+    subordinates: Mapped[List["Employee"]] = relationship("Employee", back_populates="manager")
+    
     # User as the TRAVELER (trips they are going on)
     # travelers relationship in Booking is defined as secondary, so we can access it here if needed or just query via Booking
 

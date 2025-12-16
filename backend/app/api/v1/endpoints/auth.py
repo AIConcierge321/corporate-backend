@@ -28,7 +28,12 @@ async def sso_callback(
     # payload = verify_oidc_token(sso_in.id_token)
     
     # Mock Validation
-    email = "alice@corporate.com" # Extract from token
+    # Allow switching user by passing email in id_token for dev/test
+    if "@" in sso_in.id_token:
+         email = sso_in.id_token
+    else:
+         email = "alice@corporate.com" 
+    
     external_id = "okta_123"   # Extract from token
     
     # Check DB
