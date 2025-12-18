@@ -1,136 +1,219 @@
 # Corporate Travel App — Core Logic Clarification
 (Applies to: https://bugle-glaze-62467952.figma.site/)
 
+---
+
+## Implementation Status Summary
+
+| Section | Status | Notes |
+|---------|--------|-------|
+| 1.1 Employee Data | ✅ Complete | Full name, job title, email, department, employee ID, division, cost center, phone |
+| 1.2 Hierarchy | ✅ Complete | manager_id relationship with recursive traversal |
+| 1.3 Visibility | ✅ Complete | AccessControl class enforces hierarchy-based visibility |
+| 2.1 Approval Modes | ✅ Complete | ALWAYS_ASK / ONLY_WHEN_NECESSARY stored per Organization |
+| 2.2 Cost Controls | ✅ Complete | max_amount in policy_settings |
+| 2.3 Travel Class | ✅ Complete | business_class_titles in policy_settings |
+| 2.4 Advance Booking | ✅ Complete | min_advance_days in policy_settings |
+| 3.1 Hierarchy First | ✅ Complete | Permissions tied to Employee.manager_id hierarchy |
+| 3.2 Role-Based Capabilities | ✅ Complete | Permissions class with granular capabilities |
+| 3.3 Acting On Behalf Of | ⚠️ Partial | Manager→Team works. EA→Boss delegation needs explicit table |
+| 3.4 Role Templates | ⚠️ Partial | Hardcoded in code. DB-driven roles for Phase 2 |
+
+---
+
 ## 1. Employees (Data, Hierarchy & Visibility)
 
 ### 1.1 Employee Data (from ERP)
-The system should ingest all employee attributes available from the ERP, including but not limited to:
-*   Full name
-*   Job title / position
-*   Email address
-*   Department / team
-*   Employee ID
 
-👉 Please check and let me know which types of information we can extract and if we can get more information.
+**Implemented Fields:**
+| Field | DB Column | Source |
+|-------|-----------|--------|
+| Full name | `full_name`, `first_name`, `last_name` | SCIM `name` |
+| Job title / position | `job_title` | SCIM `title` |
+| Email address | `email` | SCIM `emails[]` |
+| Department / team | `department` | SCIM enterprise extension |
+| Employee ID | `external_user_id` | SCIM `userName` or `externalId` |
+| Division | `division` | SCIM enterprise extension |
+| Cost Center | `cost_center` | SCIM enterprise extension |
+| Phone | `phone_number` | SCIM `phoneNumbers[]` |
+
+**Additional Available (if ERP provides):**
+- Manager ID (`manager_id` via `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User.manager`)
+- Location / Office Address
+- Employment Type (full-time, contractor)
 
 ### 1.2 Hierarchy as the Core Structure
-*   The organizational hierarchy defines approvals.
-*   Every employee must have a clearly defined direct supervisor (except top-level roles like CEO).
-*   All approval flows (travel, policy exceptions, etc.) route upward in the hierarchy.
 
-Example:
-*   Analyst → Manager → Director → CEO
+**Implementation:**
+- `Employee.manager_id` → Foreign key to parent Employee
+- `Employee.subordinates` → Relationship to all direct reports
+- Recursive traversal in `BookingStateMachine.submit_draft()` climbs up to 5 levels
+
+**Approval Flow:**
+```
+Analyst.manager_id → Manager
+Manager.manager_id → Director  
+Director.manager_id → CEO
+CEO.manager_id → NULL (top level)
+```
+
+**Edge Cases Handled:**
+- If direct manager is `inactive` → Routes to their manager (skip-level)
+- If no active manager in chain → Returns error: "Approval required but no active manager found"
 
 ### 1.3 Employee Visibility (Permission-Based)
-*   The Employees list is not global.
-*   Visibility is strictly controlled by the Permissions tab.
 
-Rules:
-*   A user can only see and book for employees they are permitted to act for.
-*   If a manager is allowed to book only for their own team, they should:
-    *   See only their direct and indirect reports
-    *   NOT see other managers, the CEO, or unrelated departments
-*   Visibility = Who you are allowed to act on behalf of
+**Implementation:** `app/core/access_control.py`
+
+| Permission | Visibility |
+|------------|------------|
+| `VIEW_ALL_BOOKINGS` | See everyone in org |
+| `VIEW_TEAM_BOOKINGS` | See self + all subordinates (recursive) |
+| `VIEW_SELF_BOOKINGS` | See only self |
+
+**Key Method:** `AccessControl.get_viewable_employees()`
+- Returns `None` for global access
+- Returns `List[int]` of employee IDs for restricted access
+
+---
 
 ## 2. Policies (Approval Logic & Controls)
 
 ### 2.1 Approval Mode Configuration
-The admin can choose between two policy modes:
 
-**A. “Always Ask”**
-*   Every booking always requires manager approval, regardless of:
-    *   price
-    *   timing
-    *   class of travel
+**Storage:** `Organization.approval_mode` (Enum)
+- `ALWAYS_ASK` → Every booking requires approval
+- `ONLY_WHEN_NECESSARY` → Approval only when rules violated
 
-**B. “Only When Necessary”**
-*   Manager approval is required only when a policy rule is violated
+**Implementation:** `app/services/policy_engine.py`
 
-### 2.2 Cost Controls (Example)
-Example rule: Max airfare = $800
+### 2.2 Cost Controls
 
-| Ticket Price | Always Ask | Only When Necessary |
-| :--- | :--- | :--- |
-| $700 | Approval required | No approval |
-| $1,000 | Approval required | Approval required |
+**Storage:** `Organization.policy_settings["max_amount"]`
+- Default: $1000
 
-👉 Any hard limit breach triggers approval in both modes.
+**Logic:**
+```python
+if booking.total_amount > max_amount:
+    violations.append("Max Cost Exceeded")
+```
 
 ### 2.3 Travel Class Eligibility
-*   Travel class access (e.g., Business Class) is hierarchy-based
-*   Example configurations:
-    *   Business Class → CEO only
-    *   Business Class → C-suite + Directors
-*   This requires the company structure to be accurately defined first
+
+**Storage:** `Organization.policy_settings["business_class_titles"]`
+- Default: `["CEO", "CTO", "CFO", "Director"]`
+
+**Logic:**
+```python
+if travel_class in ["business", "first"]:
+    for traveler in travelers:
+        if traveler.job_title not in allowed_titles:
+            violations.append("Travel Class Violation")
+```
 
 ### 2.4 Advance Booking Rules
-Example rule: Flights must be booked ≥ 7 days in advance
 
-| Booking Timing | Always Ask | Only When Necessary |
-| :--- | :--- | :--- |
-| 10 days ahead | Approval required | No approval |
-| 3 days ahead | Approval required | Approval required |
+**Storage:** `Organization.policy_settings["min_advance_days"]`
+- Default: 7 days
 
-👉 As long as the booking is within allowed thresholds, no approval is required under “Only When Necessary”.
+**Logic:**
+```python
+days_ahead = (booking.start_date - now).days
+if days_ahead < min_advance_days:
+    violations.append("Advance Booking Violation")
+```
 
-### 2.5 Policy Summary Rule
-*   Always Ask → approval for every booking
-*   Only When Necessary → approval only when:
-    *   cost limits are exceeded
-    *   class eligibility rules are violated
-    *   advance booking rules are broken
+### 2.5 Policy Summary
+
+| Mode | Violations | Result |
+|------|------------|--------|
+| ALWAYS_ASK | Any | `approval_required = True` |
+| ONLY_WHEN_NECESSARY | None | `approval_required = False` |
+| ONLY_WHEN_NECESSARY | Any | `approval_required = True` |
+
+---
 
 ## 3. Permissions (The Most Critical Layer)
 
 ### 3.1 Hierarchy First
-*   Permissions must be applied after extracting:
-    *   reporting lines
-    *   departments
-    *   teams
-*   Without hierarchy, permissions cannot function correctly.
+
+**Dependency Chain:**
+```
+ERP Sync (SCIM) 
+    → Employee.manager_id populated
+        → AccessControl can calculate subordinates
+            → Permissions can be evaluated
+                → Visibility enforced
+                    → Policy checks run
+```
 
 ### 3.2 Role-Based Capabilities
-Each role should define:
-*   What actions the user can perform
-*   For whom they can perform them
 
-Examples of permissions:
-*   Book flights
-*   Book hotels
-*   Book ground transport
-*   View analytics
-*   Approve travel / expenses
-*   Set or edit budgets
+**Current Permissions:** `app/core/permissions.py`
 
-### 3.3 Acting “On Behalf Of” Logic
-Permissions must distinguish between:
-*   What you can do
-*   Who you can do it for
+| Permission | Description |
+|------------|-------------|
+| `BOOK_SELF` | Can create bookings for self |
+| `BOOK_FOR_OTHERS` | Can book for subordinates |
+| `BOOK_ANYONE` | Admin: Can book for anyone |
+| `VIEW_SELF_BOOKINGS` | Can see own bookings |
+| `VIEW_TEAM_BOOKINGS` | Can see team bookings |
+| `VIEW_ALL_BOOKINGS` | Can see all org bookings |
+| `MANAGE_POLICIES` | Can edit policy settings |
+| `VIEW_ANALYTICS` | Can access dashboards |
+| `MANAGE_USERS` | Can manage employees |
 
-Examples:
-*   **Executive Assistant:**
-    *   Can book travel
-    *   Only for one specific person (their boss)
-*   **Department Manager:**
-    *   Can book for their entire team
-    *   Can approve team bookings
-*   **Travel Coordinator:**
-    *   Can book for multiple teams or departments
-*   **CEO:**
-    *   Can book for anyone
-    *   Can override policies
+### 3.3 Acting "On Behalf Of" Logic
 
-### 3.4 Role Templates (Configurable)
-Role templates should be customizable, for example:
-*   Travel Coordinator → book for department / company
-*   Department Head → set budgets + approve team
-*   Executive Assistant → book for named individual only
+**Current Support:**
 
-👉 Permissions define:
-*   Visibility
-*   Booking rights
-*   Approval authority
+| Role | What They Can Do | Who They Can Do It For | Status |
+|------|------------------|------------------------|--------|
+| Employee | Book flights/hotels | Self only | ✅ |
+| Manager | Book, View, Approve | Self + Subordinates | ✅ |
+| Travel Admin | Book, View, Override | Anyone in Org | ✅ |
+| Executive Assistant | Book | Specific Boss | ⚠️ Needs Delegation Table |
 
-## Final Principle (Important)
+**Gap: Executive Assistant Delegation**
+- Current system uses hierarchy (looks DOWN)
+- EAs need to book for someone ABOVE them
+- **Solution:** Create `Delegation` table for explicit 1-to-1 or 1-to-many assignments
+
+### 3.4 Role Templates
+
+**Current:** Hardcoded in `GROUP_PERMISSION_MAP`
+
+```python
+GROUP_PERMISSION_MAP = {
+    "travel_admin": {...},
+    "executive_assistant": {...},
+    "employee": {...},
+    "manager": {...}
+}
+```
+
+**Phase 2:** Move to database table for dynamic configuration
+
+---
+
+## Open Questions for Manager
+
+1. **Executive Assistant Delegation:**
+   - Build explicit delegation table (EA → Boss mapping)?
+   - Or treat EAs as limited admins for now?
+
+2. **Role Configuration:**
+   - Phase 1: Fixed roles in code?
+   - Phase 2: Admin UI to create/edit roles?
+
+3. **Travel Class Matrix:**
+   - Simple: "Eligible for Business: Yes/No"
+   - Complex: Job Title → Specific Cabin mapping?
+
+---
+
+## Final Principle
+```
 Hierarchy → Permissions → Visibility → Policy Enforcement
+```
 If hierarchy or permissions are wrong, everything else breaks.
