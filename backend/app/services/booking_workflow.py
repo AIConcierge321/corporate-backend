@@ -2,10 +2,14 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import select
 
 from app.models.booking import Booking, BookingStatus, PolicyStatus
 from app.models.employee import Employee
 from app.models.approval import ApprovalRequest, ApprovalStatus
+from app.services.audit_service import AuditService
+from app.services.notification_service import NotificationService
 
 class BookingStateMachine:
     """
@@ -22,8 +26,6 @@ class BookingStateMachine:
              raise HTTPException(status_code=400, detail="Only draft bookings can be submitted.")
         
         # Apply Policy Result
-        # policy_result input example: {'result': 'warn', 'approval_required': True}
-        
         p_status = policy_result.get("result", PolicyStatus.PASS)
         approval_req = policy_result.get("approval_required", False)
         
@@ -32,7 +34,6 @@ class BookingStateMachine:
         
         if p_status == PolicyStatus.BLOCK:
             booking.status = BookingStatus.REJECTED
-            # TODO: Add violation reason to local db or response
             msg = "Booking blocked by policy."
             raise HTTPException(status_code=400, detail=msg)
             
@@ -41,20 +42,19 @@ class BookingStateMachine:
         # Auto-transition based on approval
         if approval_req:
             # 1. Routing Logic: Find Manager
-            # We need to fetch the booker to find their manager
-            # Use explicit query to be safe with async session
-            from sqlalchemy import select
             stmt = select(Employee).where(Employee.id == booking.booker_id)
             result = await db.execute(stmt)
             booker = result.scalars().first()
             
             if not booker or not booker.manager_id:
-                # TODO: Fallback to Org Admin or specific group?
-                # For now, we require a manager.
                 raise HTTPException(status_code=400, detail="Approval required but no manager assigned to user.")
             
+            # Fetch Manager Email for notification
+            stmt_mgr = select(Employee).where(Employee.id == booker.manager_id)
+            res_mgr = await db.execute(stmt_mgr)
+            manager = res_mgr.scalars().first()
+
             # 2. Create Approval Request
-            from app.models.approval import ApprovalRequest, ApprovalStatus
             req = ApprovalRequest(
                 booking_id=booking.id,
                 approver_id=booker.manager_id,
@@ -62,12 +62,44 @@ class BookingStateMachine:
             )
             db.add(req)
             
+            # Audit & Notify
             booking.status = BookingStatus.PENDING_APPROVAL
-            # TODO: Trigger approval notification
+            
+            AuditService.log(
+                db, "booking", booking.id, booking.booker_id, "SUBMIT", 
+                from_state="draft", to_state="pending_approval", 
+                details=jsonable_encoder(policy_result)
+            )
+            
+            if manager:
+                await NotificationService.send_email(
+                    manager.email, 
+                    f"Approval Required: {booking.trip_name}", 
+                    f"Please approve booking {booking.id} for {booker.full_name}"
+                )
+
         else:
              booking.status = BookingStatus.APPROVED
-             # Ready for booking/ticketing
              
+             AuditService.log(
+                db, "booking", booking.id, booking.booker_id, "SUBMIT_AUTO_APPROVE", 
+                from_state="draft", to_state="approved", 
+                details=jsonable_encoder(policy_result)
+             )
+             
+             # Notify Booker
+             # Ensure booker is loaded
+             stmt = select(Employee).where(Employee.id == booking.booker_id)
+             result = await db.execute(stmt)
+             booker = result.scalars().first()
+                 
+             if booker:
+                await NotificationService.send_email(
+                    booker.email,
+                    f"Booking Approved: {booking.trip_name}",
+                    "Your booking has been auto-approved."
+                )
+
         await db.commit()
         await db.refresh(booking)
         return booking
@@ -80,9 +112,26 @@ class BookingStateMachine:
         if booking.status != BookingStatus.PENDING_APPROVAL:
             raise HTTPException(status_code=400, detail="Booking is not pending approval.")
             
-        # TODO: Verify approver permissions (e.g., is manager of booker?)
-        
+        old_status = booking.status
         booking.status = BookingStatus.APPROVED
+
+        AuditService.log(
+            db, "booking", booking.id, approver.id, "APPROVE", 
+            from_state=str(old_status.value), to_state=str(BookingStatus.APPROVED.value)
+        )
+        
+        # Notify Booker
+        stmt = select(Employee).where(Employee.id == booking.booker_id)
+        result = await db.execute(stmt)
+        booker = result.scalars().first()
+        
+        if booker:
+            await NotificationService.send_email(
+                booker.email,
+                f"Booking Approved: {booking.trip_name}",
+                f"Your booking was approved by {approver.full_name}."
+            )
+            
         await db.commit()
         await db.refresh(booking)
         return booking
@@ -92,7 +141,26 @@ class BookingStateMachine:
          if booking.status != BookingStatus.PENDING_APPROVAL:
             raise HTTPException(status_code=400, detail="Booking is not pending approval.")
          
+         old_status = booking.status
          booking.status = BookingStatus.REJECTED
+         
+         AuditService.log(
+            db, "booking", booking.id, approver.id, "REJECT", 
+            from_state=str(old_status.value), to_state=str(BookingStatus.REJECTED.value)
+         )
+         
+         # Notify Booker
+         stmt = select(Employee).where(Employee.id == booking.booker_id)
+         result = await db.execute(stmt)
+         booker = result.scalars().first()
+         
+         if booker:
+            await NotificationService.send_email(
+                booker.email,
+                f"Booking Rejected: {booking.trip_name}",
+                f"Your booking was rejected by {approver.full_name}."
+            )
+
          await db.commit()
          await db.refresh(booking)
          return booking

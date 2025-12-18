@@ -14,13 +14,14 @@ from app.services.booking_workflow import BookingStateMachine
 
 router = APIRouter()
 
+@router.get("/inbox", response_model=List[ApprovalRequestResponse])
 @router.get("/pending", response_model=List[ApprovalRequestResponse])
 async def list_pending_approvals(
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
-    List bookings waiting for MY approval.
+    List bookings waiting for MY approval (Inbox).
     """
     stmt = select(ApprovalRequest).where(
         ApprovalRequest.approver_id == current_user.id,
@@ -51,19 +52,22 @@ async def approve_request(
     if req.status != ApprovalStatus.PENDING:
         raise HTTPException(status_code=400, detail="Request is not pending")
 
-    # 3. Update Request Status
-    req.status = ApprovalStatus.APPROVED
-    req.reason = action.reason
-    db.add(req)
-    
-    # 4. Update Booking State via Workflow Service
-    # Fetch booking
+    # 3. Update Booking State via Workflow Service
+    # Fetch booking FIRST to check self-approval rule
     stmt_b = select(Booking).where(Booking.id == req.booking_id)
     res_b = await db.execute(stmt_b)
     booking = res_b.scalars().first()
     
     if booking:
+        if booking.booker_id == current_user.id:
+             raise HTTPException(status_code=400, detail="Cannot approve your own booking.")
+             
         await BookingStateMachine.approve_booking(db, booking, current_user)
+
+    # 4. Update Request Status (after workflow success)
+    req.status = ApprovalStatus.APPROVED
+    req.reason = action.reason
+    db.add(req)
     
     await db.commit()
     await db.refresh(req)

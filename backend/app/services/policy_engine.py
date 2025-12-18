@@ -22,9 +22,9 @@ class PolicyEngine:
         
         # Mock Rule: If trip name contains "Luxury", flag it.
         if booking.trip_name and "Luxury" in booking.trip_name:
-            result = PolicyStatus.WARN
-            approval_required = True
-            violations.append(PolicyViolation(policy="Luxury Travel", severity="soft"))
+            result = PolicyStatus.BLOCK
+            approval_required = False # Blocked means rejected immediately, no approval path
+            violations.append(PolicyViolation(policy="Luxury Travel", severity="hard"))
             
         if booking.trip_name and "Approval Test" in booking.trip_name:
             result = PolicyStatus.WARN
