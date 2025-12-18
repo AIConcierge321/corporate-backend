@@ -59,7 +59,6 @@ async def create_booking_draft(
     booking = Booking(
         org_id=current_user.org_id,
         booker_id=current_user.id,
-        booker_id=current_user.id,
         status="draft",
         trip_name=booking_in.trip_name,
         travelers_association=assoc_travelers

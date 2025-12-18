@@ -56,7 +56,12 @@ async def create_scim_user(
         full_name=f"{user_in.name.givenName} {user_in.name.familyName}",
         org_id=org.id,
         status="active" if user_in.active else "suspended",
-        is_active=user_in.active
+        is_active=user_in.active,
+        job_title=user_in.title,
+        department=user_in.enterprise_extension.department if user_in.enterprise_extension else None,
+        cost_center=user_in.enterprise_extension.costCenter if user_in.enterprise_extension else None,
+        division=user_in.enterprise_extension.division if user_in.enterprise_extension else None,
+        phone_number=user_in.phoneNumbers[0]["value"] if user_in.phoneNumbers and len(user_in.phoneNumbers) > 0 else None
     )
     db.add(new_user)
     await db.commit()

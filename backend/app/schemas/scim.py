@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 class SCIMName(BaseModel):
     givenName: str
@@ -18,6 +18,8 @@ class SCIMManager(BaseModel):
 class SCIMEnterpriseExtension(BaseModel):
     manager: Optional[SCIMManager] = None
     department: Optional[str] = None
+    costCenter: Optional[str] = None
+    division: Optional[str] = None
 
 class SCIMUserCreate(BaseModel):
     schemas: List[str] = ["urn:ietf:params:scim:schemas:core:2.0:User"]
@@ -26,6 +28,8 @@ class SCIMUserCreate(BaseModel):
     emails: List[SCIMEmail]
     mid: Optional[str] = None # External ID
     active: bool = True
+    title: Optional[str] = None # Job Title
+    phoneNumbers: Optional[List[Dict[str, str]]] = None
     
     # Map the enterprise extension using alias
     enterprise_extension: Optional[SCIMEnterpriseExtension] = Field(

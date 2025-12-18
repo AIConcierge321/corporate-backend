@@ -44,6 +44,11 @@ class Employee(Base):
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     first_name: Mapped[Optional[str]] = mapped_column(String)
     last_name: Mapped[Optional[str]] = mapped_column(String)
+    job_title: Mapped[Optional[str]] = mapped_column(String)
+    department: Mapped[Optional[str]] = mapped_column(String)
+    division: Mapped[Optional[str]] = mapped_column(String)
+    cost_center: Mapped[Optional[str]] = mapped_column(String)
+    phone_number: Mapped[Optional[str]] = mapped_column(String)
     
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

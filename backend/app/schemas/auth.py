@@ -21,6 +21,8 @@ class EmployeeResponse(BaseModel):
     full_name: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    job_title: Optional[str] = None
+    department: Optional[str] = None
     status: str
     external_user_id: Optional[str] = None
     
