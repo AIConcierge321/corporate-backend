@@ -8,6 +8,9 @@ class BookingBase(BaseModel):
 
 class BookingCreate(BookingBase):
     traveler_ids: List[int] # Who are we booking for?
+    total_amount: float = 0
+    travel_class: str = "economy"
+    start_date: Optional[datetime] = None
 
 from app.models.booking import BookingStatus, PolicyStatus
 

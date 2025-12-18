@@ -41,23 +41,40 @@ class BookingStateMachine:
         
         # Auto-transition based on approval
         if approval_req:
-            # 1. Routing Logic: Find Manager
+            # 1. Recursive Hierarchy Traversal: Find next active manager
             stmt = select(Employee).where(Employee.id == booking.booker_id)
             result = await db.execute(stmt)
             booker = result.scalars().first()
             
-            if not booker or not booker.manager_id:
-                raise HTTPException(status_code=400, detail="Approval required but no manager assigned to user.")
+            manager = None
+            if booker:
+                current_e = booker
+                # Traverse up to 5 levels to find an active manager
+                for _ in range(5):
+                    if not current_e.manager_id:
+                        break # Reached top (CEO)
+                        
+                    stmt_mgr = select(Employee).where(Employee.id == current_e.manager_id)
+                    res_mgr = await db.execute(stmt_mgr)
+                    potential_mgr = res_mgr.scalars().first()
+                    
+                    if potential_mgr and potential_mgr.status == 'active':
+                        manager = potential_mgr
+                        break
+                    elif potential_mgr:
+                        # Manager exists but inactive/suspended -> Route to *their* manager
+                        current_e = potential_mgr
+                    else:
+                        break
             
-            # Fetch Manager Email for notification
-            stmt_mgr = select(Employee).where(Employee.id == booker.manager_id)
-            res_mgr = await db.execute(stmt_mgr)
-            manager = res_mgr.scalars().first()
+            if not manager:
+                 # Fallback: Validation should arguably happen before, but fail safely here
+                 raise HTTPException(status_code=400, detail="Approval required but no active manager found in hierarchy.")
 
             # 2. Create Approval Request
             req = ApprovalRequest(
                 booking_id=booking.id,
-                approver_id=booker.manager_id,
+                approver_id=manager.id,
                 status=ApprovalStatus.PENDING
             )
             db.add(req)

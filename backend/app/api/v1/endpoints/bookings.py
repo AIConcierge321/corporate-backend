@@ -61,6 +61,9 @@ async def create_booking_draft(
         booker_id=current_user.id,
         status="draft",
         trip_name=booking_in.trip_name,
+        total_amount=booking_in.total_amount,
+        start_date=booking_in.start_date,
+        travel_class=booking_in.travel_class,
         travelers_association=assoc_travelers
     )
     db.add(booking)
@@ -89,21 +92,25 @@ async def list_bookings(
     """
     List bookings based on visibility permissions and filters.
     """
-    from app.core.permissions import get_permissions_for_groups
-    perms = get_permissions_for_groups([g.name for g in current_user.groups])
+    from app.core.access_control import AccessControl
+    ac = AccessControl(db, current_user)
     
     stmt = select(Booking).options(selectinload(Booking.travelers)).where(Booking.org_id == current_user.org_id)
     
-    # Permissions
-    if Permissions.VIEW_ALL_BOOKINGS in perms:
-        pass 
-    elif Permissions.VIEW_TEAM_BOOKINGS in perms:
-        # Created by me, OR I am traveler, OR created by my subordinates (if Manager)
-        stmt = stmt.where((Booking.booker_id == current_user.id) | (Booking.travelers.any(Employee.id == current_user.id)))
-    elif Permissions.VIEW_SELF_BOOKINGS in perms:
-        stmt = stmt.where((Booking.booker_id == current_user.id) | (Booking.travelers.any(Employee.id == current_user.id)))
+    # Permissions & Visibility
+    viewable_ids = ac.get_viewable_employees()
+    
+    if viewable_ids is None:
+        # VIEW_ALL_BOOKINGS -> No filter needed
+        pass
     else:
-        return []
+        # Filter: Booker OR Traveler must be in viewable_ids
+        # Optimization: If list is huge, this IN clause is heavy. 
+        # But for typical corporate hierarchy, it's fine.
+        stmt = stmt.where(
+            (Booking.booker_id.in_(viewable_ids)) | 
+            (Booking.travelers.any(Employee.id.in_(viewable_ids)))
+        )
 
     # Filters
     if status:
@@ -194,7 +201,7 @@ async def submit_booking(
     travelers_list = [assoc.employee for assoc in booking.travelers_association]
     
     from app.services.policy_engine import PolicyEngine
-    policy_result = PolicyEngine.evaluate(booking, travelers_list)
+    policy_result = await PolicyEngine.evaluate(db, booking, travelers_list)
     
     # 3. State Machine Transition
     from app.services.booking_workflow import BookingStateMachine

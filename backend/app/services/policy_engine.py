@@ -1,41 +1,119 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 from app.models.booking import Booking, PolicyStatus
 from app.models.employee import Employee
+from app.models.organization import Organization, ApprovalMode
 from app.schemas.policy import PolicyResult, PolicyViolation
 
 class PolicyEngine:
     """
-    Minimal Rule Engine for Phase 5.
+    Advanced Rule Engine implementing:
+    - Always Ask vs Only When Necessary
+    - Cost Controls
+    - Advance Booking rules
+    - Class Eligibility (Hierarchy Based)
     """
+    
     @staticmethod
-    def evaluate(booking: Booking, travelers: List[Employee]) -> Dict[str, Any]:
+    async def evaluate(db: AsyncSession, booking: Booking, travelers: List[Employee]) -> Dict[str, Any]:
         """
         Evaluate policies against a booking.
         """
-        result = PolicyStatus.PASS
-        approval_required = False
+        # 1. Fetch Organization Policy Settings
+        stmt = select(Organization).where(Organization.id == booking.org_id)
+        result = await db.execute(stmt)
+        org = result.scalars().first()
+        
+        if not org:
+            # Fallback safe default
+            return {"result": PolicyStatus.PASS, "approval_required": True, "violations": []}
+            
+        settings = org.policy_settings or {}
+        mode = org.approval_mode or ApprovalMode.ALWAYS_ASK
+        
         violations = []
+        hard_block = False
         
-        # Rule 1: High Content Cost (Assume booking field has estimate, or we pass it)
-        # For now, rely on booking.total_amount (if set during draft? usually set during search selection)
-        # Let's assume draft has 0, but if we had cost...
+        # --- 2. Cost Controls ---
+        # Rule: Max airfare/total cost
+        # Defaults to $1000 if not set
+        max_amount = settings.get("max_amount", 1000.0) 
+        if booking.total_amount and booking.total_amount > max_amount:
+            violations.append(PolicyViolation(
+                policy="Max Cost Exceeded",
+                severity="hard",
+                details=f"Amount {booking.total_amount} > Limit {max_amount}"
+            ))
+
+        # --- 3. Advance Booking Rules ---
+        # Rule: Minimum days in advance
+        min_days = settings.get("min_advance_days", 7)
+        if booking.start_date:
+            # Ensure timezone awareness
+            now = datetime.now(timezone.utc)
+            start = booking.start_date
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+                
+            delta = (start - now).days
+            if delta < min_days:
+                 violations.append(PolicyViolation(
+                    policy="Advance Booking Violation",
+                    severity="soft",
+                    details=f"Booked {delta} days ahead, required {min_days}"
+                ))
+
+        # --- 4. Travel Class Eligibility ---
+        # Example: Business Class -> CEO/C-Suite only
+        # We need a way to identify "C-Suite". For now, we check Job Title or Grade?
+        # Let's use a simple Title check from settings
+        allowed_business_titles = settings.get("business_class_titles", ["CEO", "CTO", "CFO", "Director"])
         
-        # Mock Rule: If trip name contains "Luxury", flag it.
-        if booking.trip_name and "Luxury" in booking.trip_name:
-            result = PolicyStatus.BLOCK
-            approval_required = False # Blocked means rejected immediately, no approval path
-            violations.append(PolicyViolation(policy="Luxury Travel", severity="hard"))
-            
-        if booking.trip_name and "Approval Test" in booking.trip_name:
-            result = PolicyStatus.WARN
+        if booking.travel_class and booking.travel_class.lower() in ["business", "first"]:
+            # Check if ALL travelers are eligible? Or ANY?
+            # Typically, if a VIP travels, entourage might get upgrade, but let's be strict: ALL must be eligible.
+            for t in travelers:
+                title = t.job_title or ""
+                # Simple iterator check
+                is_eligible = any(allowed in title for allowed in allowed_business_titles)
+                if not is_eligible:
+                     violations.append(PolicyViolation(
+                        policy="Travel Class Violation",
+                        severity="soft", # Usually requires approval, not hard block
+                        details=f"Traveler {t.full_name} ({title}) not eligible for {booking.travel_class}"
+                    ))
+        
+        # --- 5. Determine Final Status ---
+        
+        # Check for HARD BLOCKS (e.g. if we had a "Denied Destination" list)
+        if hard_block:
+             return {
+                "result": PolicyStatus.BLOCK, 
+                "approval_required": False, 
+                "violations": violations
+            }
+
+        # Approval Logic
+        approval_required = False
+        
+        if mode == ApprovalMode.ALWAYS_ASK:
             approval_required = True
-            violations.append(PolicyViolation(policy="Manual Approval Test", severity="soft"))
+        elif mode == ApprovalMode.ONLY_WHEN_NECESSARY:
+            if len(violations) > 0:
+                approval_required = True
+            else:
+                approval_required = False
+                
+        # Result Status
+        final_status = PolicyStatus.PASS
+        if violations:
+            final_status = PolicyStatus.WARN # Default to WARN so manager can override
             
-        # Mock Rule: If traveler is inactive (shouldn't happen)
-        # ...
-        
         return {
-            "result": result, 
+            "result": final_status, 
             "approval_required": approval_required, 
             "violations": violations
         }

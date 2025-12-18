@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, Integer, ForeignKey, DateTime, func, Boolean, Enum
+from datetime import datetime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 import enum
@@ -60,6 +61,9 @@ class Booking(Base):
     total_amount: Mapped[Optional[float]] = mapped_column(Integer, default=0)
     currency: Mapped[str] = mapped_column(String, default="USD")
     trip_name: Mapped[Optional[str]] = mapped_column(String)
+    
+    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    travel_class: Mapped[Optional[str]] = mapped_column(String, default="economy") # economy, business, first
     
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

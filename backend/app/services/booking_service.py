@@ -8,24 +8,26 @@ async def get_bookable_employees(db: AsyncSession, current_user: Employee) -> Li
     """
     Determine which employees the current user can book for based on permissions.
     """
-    # Calculate permissions
-    user_group_names = [g.name for g in current_user.groups]
-    permissions = get_permissions_for_groups(user_group_names)
+    from app.core.access_control import AccessControl
+    ac = AccessControl(db, current_user)
     
-    # 1. Book Anyone (Travel Admin)
-    # TODO: Scale this for large orgs (pagination/search instead of list all)
-    if Permissions.BOOK_ANYONE in permissions:
-        result = await db.execute(select(Employee).where(Employee.org_id == current_user.org_id))
+    # Check simple permission first for efficiency
+    if ac.can(Permissions.BOOK_ANYONE):
+        # Admin: Return all active employees in Org
+        result = await db.execute(select(Employee).where(Employee.org_id == current_user.org_id, Employee.is_active == True))
         return result.scalars().all()
         
-    # 2. Book for Others (Executive Assistant / Manager)
-    # Logic: Can book for people who have assigned this user as a 'delegate' or are in same 'team'
-    # For now (MVP): We'll assume EA can book for anyone in their groups.
-    # TODO: Implement explicit delegation table
-    if Permissions.BOOK_FOR_OTHERS in permissions:
-        # Placeholder: Return self + basic team logic (e.g. same group members)
-        # For strict MVP: Just return self until delegation table exists
-        return [current_user] 
-
-    # 3. Default: Book Self Only
-    return [current_user]
+    bookable_ids = {current_user.id}
+    
+    # Manager Logic
+    if ac.can(Permissions.BOOK_FOR_OTHERS):
+        # In AccessControl, we use _get_all_subordinates to find the tree
+        subordinates = ac._get_all_subordinates()
+        for s in subordinates:
+             if s.is_active:
+                bookable_ids.add(s.id)
+    
+    # Fetch objects
+    stmt = select(Employee).where(Employee.id.in_(list(bookable_ids)))
+    result = await db.execute(stmt)
+    return result.scalars().all()
