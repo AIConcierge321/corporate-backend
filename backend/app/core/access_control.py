@@ -1,187 +1,166 @@
 """
-AccessControl - Centralized logic for Hierarchy + Delegation based permissions.
+AccessControl - Centralized logic for Role-based permissions and access scopes.
 
-Implements:
-- Hierarchy-based visibility (Manager → Subordinates)
-- Delegation-based visibility (EA → Boss via explicit grant)
-- "Acting On Behalf Of" logic
+Updated to use dynamic RoleTemplates from database instead of hardcoded groups.
 """
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List, Optional, Set, Union
+from typing import List, Optional, Set
 from datetime import datetime, timezone
 
 from app.models.employee import Employee
-from app.models.delegation import Delegation, DelegationType
-from app.core.permissions import Permissions, get_permissions_for_groups
+from app.models.role_template import RoleTemplate, EmployeeRoleAssignment, AccessScope
 
 
 class AccessControl:
     """
-    Centralized logic for Hierarchy + Delegation based permissions.
+    Role-based access control using dynamic role templates.
+    
+    Permissions come from RoleTemplate.permissions (JSONB).
+    Access scope comes from EmployeeRoleAssignment.access_scope.
     """
-    def __init__(self, db: Session, actor: Employee):
-        self.db = db
-        self.actor = actor
-        # Calculate permissions based on groups
-        group_names = [g.name for g in actor.groups] if actor.groups else []
-        self.permissions = get_permissions_for_groups(group_names)
+    
+    def __init__(self, actor: Employee):
+        """
+        Initialize AccessControl for an actor.
         
-        # Cache for delegations (lazy loaded)
-        self._delegations_cache: Optional[List[int]] = None
-
+        Note: actor.role_assignments should be eagerly loaded (lazy="selectin").
+        """
+        self.actor = actor
+        self._effective_permissions: Optional[dict] = None
+        self._accessible_ids: Optional[Set[int]] = None
+        self._has_global_access: bool = False
+        
+        # Pre-compute permissions and access
+        self._compute_effective_permissions()
+    
+    def _compute_effective_permissions(self):
+        """Compute effective permissions from all role assignments."""
+        self._effective_permissions = {}
+        self._accessible_ids = {self.actor.id}  # Always includes self
+        
+        assignments = getattr(self.actor, 'role_assignments', []) or []
+        
+        for assignment in assignments:
+            if not assignment.is_active:
+                continue
+            
+            template = assignment.role_template
+            if not template:
+                continue
+            
+            # Merge permissions (any True wins)
+            for perm, enabled in (template.permissions or {}).items():
+                if enabled:
+                    self._effective_permissions[perm] = True
+            
+            # Compute accessible employee IDs based on scope
+            self._process_access_scope(assignment)
+    
+    def _process_access_scope(self, assignment: EmployeeRoleAssignment):
+        """Process access scope from assignment."""
+        scope = assignment.access_scope
+        
+        if scope == AccessScope.ALL:
+            self._has_global_access = True
+        
+        elif scope == AccessScope.SELF:
+            # Already included
+            pass
+        
+        elif scope == AccessScope.INDIVIDUALS:
+            if assignment.accessible_employee_ids:
+                self._accessible_ids.update(assignment.accessible_employee_ids)
+        
+        elif scope == AccessScope.GROUP:
+            # Groups are handled separately by querying employees in those departments
+            # Store the groups for later lookup
+            if not hasattr(self, '_accessible_groups'):
+                self._accessible_groups = set()
+            if assignment.accessible_groups:
+                self._accessible_groups.update(assignment.accessible_groups)
+        
+        elif scope == AccessScope.HIERARCHY:
+            # Hierarchy-based access uses manager/subordinate relationship
+            # Get all subordinates
+            subordinates = self._get_all_subordinates()
+            self._accessible_ids.update(s.id for s in subordinates)
+    
     def can(self, permission: str) -> bool:
         """
-        Check if the actor has a specific permission capability.
+        Check if the actor has a specific permission.
         """
-        return permission in self.permissions
-
-    def can_act_for(self, target_employee_id: int, action_type: str = "booking") -> bool:
+        if self._effective_permissions is None:
+            self._compute_effective_permissions()
+        return self._effective_permissions.get(permission, False)
+    
+    def can_act_for(self, target_employee_id: int) -> bool:
         """
-        Determines if the actor can perform actions on behalf of the target employee.
-        
-        Rules (in order of precedence):
-        1. Self: Always allowed if they have basic self-rights.
-        2. Admin: Allowed if they have BOOK_ANYONE.
-        3. Delegation: Allowed if explicit delegation exists.
-        4. Hierarchy: Allowed if target is in their subordinate tree.
+        Check if actor can perform actions for target employee.
         """
-        # 1. Self interaction
+        # Self always allowed if they have any booking permission
         if self.actor.id == target_employee_id:
-            return self.can(Permissions.BOOK_SELF) or self.can(Permissions.VIEW_SELF_BOOKINGS)
-
-        # 2. Global Admin / Book Anyone
-        if self.can(Permissions.BOOK_ANYONE):
+            return any(self.can(p) for p in ['book_flights', 'book_hotels', 'book_ground'])
+        
+        # Global access
+        if self._has_global_access:
             return True
-
-        # 3. Delegation Check (EA → Boss)
-        delegated_ids = self._get_delegated_employee_ids(action_type)
-        if target_employee_id in delegated_ids:
+        
+        # Check if target is in accessible IDs
+        if target_employee_id in self._accessible_ids:
             return True
-
-        # 4. Hierarchy Check (Manager → Subordinate)
-        if self.can(Permissions.BOOK_FOR_OTHERS) or self.can(Permissions.VIEW_TEAM_BOOKINGS):
-            if self._is_subordinate(target_employee_id):
-                return True
         
         return False
-
-    def get_viewable_employees(self) -> Optional[List[int]]:
+    
+    def get_accessible_employee_ids(self) -> Optional[List[int]]:
         """
-        Return a list of employee IDs that this actor can view/manage.
-        Returns None for global access (admin).
+        Get list of employee IDs this actor can access.
+        Returns None for global access.
         """
-        if self.can(Permissions.BOOK_ANYONE) or self.can(Permissions.VIEW_ALL_BOOKINGS):
-            return None  # Global Access
-
-        viewable_ids = {self.actor.id}
+        if self._has_global_access:
+            return None
         
-        # Add delegated employees
-        delegated_ids = self._get_delegated_employee_ids("view")
-        viewable_ids.update(delegated_ids)
-        
-        # Add subordinates
-        if self.can(Permissions.VIEW_TEAM_BOOKINGS) or self.can(Permissions.BOOK_FOR_OTHERS):
-            subordinates = self._get_all_subordinates()
-            viewable_ids.update(sub.id for sub in subordinates)
-             
-        return list(viewable_ids)
-
-    def get_bookable_employee_ids(self) -> Optional[List[int]]:
+        return list(self._accessible_ids)
+    
+    def get_travel_class_eligibility(self) -> List[str]:
         """
-        Return a list of employee IDs that this actor can book for.
-        Returns None for global access (admin).
+        Get list of travel classes this actor is eligible for.
         """
-        if self.can(Permissions.BOOK_ANYONE):
-            return None  # Global Access
-
-        bookable_ids = {self.actor.id}
-        
-        # Add delegated employees (booking type)
-        delegated_ids = self._get_delegated_employee_ids("booking")
-        bookable_ids.update(delegated_ids)
-        
-        # Add subordinates if manager
-        if self.can(Permissions.BOOK_FOR_OTHERS):
-            subordinates = self._get_all_subordinates()
-            bookable_ids.update(sub.id for sub in subordinates if sub.is_active)
-             
-        return list(bookable_ids)
-
-    def _get_delegated_employee_ids(self, action_type: str = "booking") -> Set[int]:
+        classes = []
+        if self.can('economy_class'):
+            classes.append('economy')
+        if self.can('premium_economy_class'):
+            classes.append('premium_economy')
+        if self.can('business_class'):
+            classes.append('business')
+        if self.can('first_class'):
+            classes.append('first')
+        return classes
+    
+    def is_eligible_for_class(self, travel_class: str) -> bool:
         """
-        Get employee IDs that have delegated rights to this actor.
-        
-        action_type: "booking", "approval", "view", or "full"
+        Check if actor is eligible for a specific travel class.
         """
-        # Map action type to delegation types that satisfy it
-        type_map = {
-            "booking": [DelegationType.BOOKING, DelegationType.FULL],
-            "approval": [DelegationType.APPROVAL, DelegationType.FULL],
-            "view": [DelegationType.VIEW, DelegationType.BOOKING, DelegationType.APPROVAL, DelegationType.FULL],
+        class_map = {
+            'economy': 'economy_class',
+            'premium_economy': 'premium_economy_class',
+            'business': 'business_class',
+            'first': 'first_class',
         }
-        
-        allowed_types = type_map.get(action_type, [DelegationType.FULL])
-        now = datetime.now(timezone.utc)
-        
-        delegated_ids = set()
-        
-        # Note: This is synchronous. For async context, caller should pre-fetch delegations.
-        # For now, we assume delegations are eagerly loaded or we're in sync context.
-        # In production, consider caching or eager loading.
-        
-        # Query delegations where this actor is the delegate
-        # This requires sync session - for async, refactor to pass pre-fetched delegations
-        try:
-            # Try to use the session if it supports execute
-            from sqlalchemy import select as sync_select
-            stmt = sync_select(Delegation).where(
-                Delegation.delegate_id == self.actor.id,
-                Delegation.is_active == True,
-                Delegation.delegation_type.in_(allowed_types)
-            )
-            
-            # Filter by time bounds
-            result = self.db.execute(stmt)
-            for d in result.scalars().all():
-                # Check time bounds
-                if d.starts_at and d.starts_at > now:
-                    continue
-                if d.expires_at and d.expires_at < now:
-                    continue
-                delegated_ids.add(d.delegator_id)
-        except Exception:
-            # If session doesn't support sync execute, return empty
-            # This is a fallback - proper implementation should handle async
-            pass
-            
-        return delegated_ids
-
-    def _is_subordinate(self, target_id: int) -> bool:
-        """
-        Check if target_id is a subordinate (direct or indirect) of actor.
-        """
-        # Quick check on direct reports
-        if hasattr(self.actor, 'subordinates') and self.actor.subordinates:
-            for direct in self.actor.subordinates:
-                if direct.id == target_id:
-                    return True
-        
-        # Deep check
-        all_subs = self._get_all_subordinates()
-        return any(s.id == target_id for s in all_subs)
-
+        perm = class_map.get(travel_class.lower())
+        return self.can(perm) if perm else False
+    
     def _get_all_subordinates(self) -> List[Employee]:
         """
-        Fetch all subordinates (direct and indirect) using BFS.
+        Get all subordinates using hierarchy (BFS traversal).
         """
         subordinates = []
         
         if not hasattr(self.actor, 'subordinates') or not self.actor.subordinates:
             return subordinates
-            
-        queue = [s for s in self.actor.subordinates]
+        
+        queue = list(self.actor.subordinates)
         visited = {self.actor.id}
         
         while queue:
@@ -191,8 +170,35 @@ class AccessControl:
             visited.add(current.id)
             subordinates.append(current)
             
-            # Add sub-subordinates
             if hasattr(current, 'subordinates') and current.subordinates:
                 queue.extend(current.subordinates)
-            
+        
         return subordinates
+
+
+async def get_accessible_employee_ids_with_groups(
+    db: AsyncSession,
+    access_control: AccessControl,
+    org_id
+) -> Optional[List[int]]:
+    """
+    Get accessible employee IDs including group-based access.
+    
+    This queries the database for employees in accessible groups.
+    """
+    if access_control._has_global_access:
+        return None
+    
+    accessible_ids = set(access_control._accessible_ids)
+    
+    # Add employees from accessible groups
+    if hasattr(access_control, '_accessible_groups') and access_control._accessible_groups:
+        stmt = select(Employee.id).where(
+            Employee.org_id == org_id,
+            Employee.department.in_(access_control._accessible_groups)
+        )
+        result = await db.execute(stmt)
+        group_ids = [r[0] for r in result.all()]
+        accessible_ids.update(group_ids)
+    
+    return list(accessible_ids)

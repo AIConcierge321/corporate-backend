@@ -36,3 +36,4 @@ class Organization(Base):
     # Relationships
     employees: Mapped[List["Employee"]] = relationship(back_populates="organization")
     groups: Mapped[List["DirectoryGroup"]] = relationship(back_populates="organization")
+    role_templates: Mapped[List["RoleTemplate"]] = relationship(back_populates="organization")

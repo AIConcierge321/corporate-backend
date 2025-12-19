@@ -75,4 +75,10 @@ class Employee(Base):
     
     # User as the TRAVELER (trips they are going on)
     # travelers relationship in Booking is defined as secondary, so we can access it here if needed or just query via Booking
-
+    
+    # Role-based permissions
+    role_assignments: Mapped[List["EmployeeRoleAssignment"]] = relationship(
+        "EmployeeRoleAssignment", 
+        back_populates="employee",
+        lazy="selectin"  # Eager load for permission checks
+    )
