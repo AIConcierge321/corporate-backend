@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
+    # AirportTransfer API (Ground Transport)
+    # Get API key from: emine@airporttransfer.com or hasan@airporttransfer.com
+    AIRPORT_TRANSFER_API_KEY: Optional[str] = None
+    AIRPORT_TRANSFER_BASE_URL: str = "https://api.airporttransfer.com"
+    AIRPORT_TRANSFER_USE_MOCK: bool = True  # Set to False when you have API key
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,

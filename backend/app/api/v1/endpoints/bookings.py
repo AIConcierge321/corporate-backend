@@ -1,3 +1,13 @@
+"""
+Booking API Endpoints
+
+Supports:
+- Create draft bookings
+- List bookings with role-based visibility
+- Submit for approval
+- View individual bookings
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,50 +17,54 @@ from datetime import datetime
 import uuid
 
 from app.api import deps
-from app.api.auth_deps import require_permissions
-from app.core.permissions import Permissions
 from app.db.session import get_db
-from app.models.booking import Booking, BookingTraveler, BookingStatus
+from app.models.booking import Booking, BookingTraveler, BookingStatus, TravelerRole
 from app.models.employee import Employee
 from app.schemas.booking import BookingCreate, BookingResponse
-from app.services.booking_service import get_bookable_employees
+from app.services.booking_service import get_bookable_employees, check_can_book_for
+from app.core.access_control import AccessControl, get_accessible_employee_ids_with_groups
 
 router = APIRouter()
+
 
 @router.post("/draft", response_model=BookingResponse)
 async def create_booking_draft(
     booking_in: BookingCreate,
-    current_user: Employee = Depends(require_permissions({Permissions.BOOK_SELF})),
+    current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
     Create a new draft booking.
-    Enforces 'Book-for' logic.
+    
+    Uses role-based access control to validate booking-for permissions.
     """
-    # 1. Validate 'Book-for' permissions
-    allowed_travelers = await get_bookable_employees(db, current_user)
-    allowed_ids = {t.id for t in allowed_travelers}
+    # 1. Check AccessControl
+    ac = AccessControl(current_user)
     
+    # Check if user has any booking permission
+    can_book = ac.can("book_flights") or ac.can("book_hotels") or ac.can("book_ground")
+    if not can_book:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to create bookings"
+        )
     
-    # Check if we are booking for someone we are allowed to
-    requesting_ids = set(booking_in.traveler_ids)
-    if not requesting_ids.issubset(allowed_ids):
-         raise HTTPException(
-            status_code=403, 
+    # 2. Validate 'Book-for' permissions using role-based access
+    allowed = await check_can_book_for(db, current_user, booking_in.traveler_ids)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
             detail="You are not authorized to book for one or more of these travelers."
         )
 
-    # 2. Fetch traveler objects
+    # 3. Fetch traveler objects
     result = await db.execute(select(Employee).where(Employee.id.in_(booking_in.traveler_ids)))
     travelers = result.scalars().all()
     
-    if len(travelers) != len(requesting_ids):
+    if len(travelers) != len(booking_in.traveler_ids):
         raise HTTPException(status_code=404, detail="One or more travelers not found.")
 
-    # 3. Create Draft
-    from app.models.booking import BookingTraveler, TravelerRole
-    
-    # Assume first traveler is Primary (or logic based on booker)
+    # 4. Create Draft
     assoc_travelers = []
     for idx, t in enumerate(travelers):
         role = TravelerRole.PRIMARY if idx == 0 else TravelerRole.ADDITIONAL
@@ -70,15 +84,15 @@ async def create_booking_draft(
     await db.commit()
     await db.refresh(booking)
     
-    # Manually construct response to handle traveler_ids
     return BookingResponse(
         id=booking.id,
         status=booking.status,
         booker_id=booking.booker_id,
-        traveler_ids=[t.id for t in travelers], # Use local var
+        traveler_ids=[t.id for t in travelers],
         created_at=booking.created_at,
         trip_name=booking.trip_name
     )
+
 
 @router.get("/", response_model=List[BookingResponse])
 async def list_bookings(
@@ -90,29 +104,39 @@ async def list_bookings(
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
-    List bookings based on visibility permissions and filters.
+    List bookings based on role-based visibility permissions.
+    
+    Visibility is determined by:
+    - view_own_bookings: Only own bookings
+    - view_team_bookings: Team/subordinate bookings
+    - view_all_bookings: All org bookings
     """
-    from app.core.access_control import AccessControl
-    ac = AccessControl(db, current_user)
+    ac = AccessControl(current_user)
     
-    stmt = select(Booking).options(selectinload(Booking.travelers)).where(Booking.org_id == current_user.org_id)
+    stmt = select(Booking).options(selectinload(Booking.travelers)).where(
+        Booking.org_id == current_user.org_id
+    )
     
-    # Permissions & Visibility
-    viewable_ids = ac.get_viewable_employees()
-    
-    if viewable_ids is None:
-        # VIEW_ALL_BOOKINGS -> No filter needed
+    # Role-based visibility
+    if ac.can("view_all_bookings"):
+        # Admin: no filter needed
         pass
+    elif ac.can("view_team_bookings"):
+        # Manager: can see team bookings based on access scope
+        accessible_ids = await get_accessible_employee_ids_with_groups(db, ac, current_user.org_id)
+        if accessible_ids:
+            stmt = stmt.where(
+                (Booking.booker_id.in_(accessible_ids)) |
+                (Booking.travelers.any(Employee.id.in_(accessible_ids)))
+            )
     else:
-        # Filter: Booker OR Traveler must be in viewable_ids
-        # Optimization: If list is huge, this IN clause is heavy. 
-        # But for typical corporate hierarchy, it's fine.
+        # Regular employee: only own bookings
         stmt = stmt.where(
-            (Booking.booker_id.in_(viewable_ids)) | 
-            (Booking.travelers.any(Employee.id.in_(viewable_ids)))
+            (Booking.booker_id == current_user.id) |
+            (Booking.travelers.any(Employee.id == current_user.id))
         )
 
-    # Filters
+    # Apply filters
     if status:
         stmt = stmt.where(Booking.status == status)
     
@@ -123,12 +147,11 @@ async def list_bookings(
         stmt = stmt.where(Booking.created_at <= to_date)
         
     if traveler_id:
-        # Ensure user has permission to view this traveler's bookings if restricted?
-        # For now, apply filter on top of base constraints.
         stmt = stmt.where(Booking.travelers.any(Employee.id == traveler_id))
 
     result = await db.execute(stmt)
     return result.scalars().all()
+
 
 @router.get("/{booking_id}", response_model=BookingResponse)
 async def get_booking(
@@ -136,6 +159,15 @@ async def get_booking(
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
+    """
+    Get a specific booking.
+    
+    Access allowed if:
+    - User is the booker
+    - User is a traveler
+    - User has view_all_bookings permission
+    - User has view_team_bookings and booking is within their access scope
+    """
     stmt = select(Booking).options(selectinload(Booking.travelers)).where(Booking.id == booking_id)
     result = await db.execute(stmt)
     booking = result.scalars().first()
@@ -143,42 +175,34 @@ async def get_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
         
-    # Check ownership
     if booking.org_id != current_user.org_id:
-         raise HTTPException(status_code=404, detail="Booking not found")
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    # Granular Permissions Check
-    from app.core.permissions import get_permissions_for_groups
-    perms = get_permissions_for_groups([g.name for g in current_user.groups])
+    # Access check using roles
+    ac = AccessControl(current_user)
     
     is_owner = booking.booker_id == current_user.id
     is_traveler = any(t.id == current_user.id for t in booking.travelers)
-    is_admin = Permissions.VIEW_ALL_BOOKINGS in perms
+    has_global_view = ac.can("view_all_bookings")
     
-    # Manager check (simplistic: is manager of booker?)
-    # For now, if VIEW_TEAM_BOOKINGS, we need to check relationship.
-    # To keep it efficient, let's assume if they have VIEW_TEAM_BOOKINGS, 
-    # we need to query if they manage the booker.
-    can_view_team = Permissions.VIEW_TEAM_BOOKINGS in perms
-    is_manager = False
+    if is_owner or is_traveler or has_global_view:
+        return booking
     
-    if can_view_team and not (is_owner or is_traveler or is_admin):
-        # Fetch booker to check manager
-        booker_stmt = select(Employee).where(Employee.id == booking.booker_id)
-        booker_res = await db.execute(booker_stmt)
-        booker = booker_res.scalars().first()
-        if booker and booker.manager_id == current_user.id:
-            is_manager = True
+    # Check team visibility
+    if ac.can("view_team_bookings"):
+        accessible_ids = await get_accessible_employee_ids_with_groups(db, ac, current_user.org_id)
+        if accessible_ids is None or booking.booker_id in accessible_ids:
+            return booking
+        if any(t.id in accessible_ids for t in booking.travelers):
+            return booking
+    
+    raise HTTPException(status_code=403, detail="Not authorized to view this booking")
 
-    if not (is_owner or is_traveler or is_admin or is_manager):
-         raise HTTPException(status_code=403, detail="Not authorized to view this booking")
-
-    return booking
 
 @router.post("/{booking_id}/submit", response_model=BookingResponse)
 async def submit_booking(
     booking_id: uuid.UUID,
-    current_user: Employee = Depends(deps.get_current_user), # Any employee? Should check ownership
+    current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
@@ -186,7 +210,9 @@ async def submit_booking(
     Runs Policy Engine -> Updates State.
     """
     # 1. Fetch Booking
-    stmt = select(Booking).options(selectinload(Booking.travelers_association).joinedload(BookingTraveler.employee)).where(Booking.id == booking_id)
+    stmt = select(Booking).options(
+        selectinload(Booking.travelers_association).joinedload(BookingTraveler.employee)
+    ).where(Booking.id == booking_id)
     result = await db.execute(stmt)
     booking = result.scalars().first()
     
@@ -196,7 +222,6 @@ async def submit_booking(
     if booking.booker_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to submit this booking")
         
-    # 2. Run Policy Rules
     # 2. Run Policy Rules
     travelers_list = [assoc.employee for assoc in booking.travelers_association]
     
@@ -216,3 +241,15 @@ async def submit_booking(
         created_at=updated_booking.created_at,
         trip_name=updated_booking.trip_name
     )
+
+
+@router.get("/me/bookable-employees")
+async def get_my_bookable_employees(
+    current_user: Employee = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> Any:
+    """
+    Get list of employees the current user can book for.
+    """
+    employees = await get_bookable_employees(db, current_user)
+    return [{"id": e.id, "name": e.full_name, "email": e.email} for e in employees]

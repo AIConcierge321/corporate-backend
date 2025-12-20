@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import health, auth, scim, bookings, approvals, search, destinations, roles
+from app.api.v1.endpoints import health, auth, scim, bookings, approvals, search, destinations, roles, transfers
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["Health"])
@@ -10,4 +10,4 @@ api_router.include_router(approvals.router, prefix="/approvals", tags=["Approval
 api_router.include_router(search.router, prefix="/search", tags=["Search"])
 api_router.include_router(destinations.router, prefix="/destinations", tags=["Destinations"])
 api_router.include_router(roles.router, prefix="/roles", tags=["Roles"])
-
+api_router.include_router(transfers.router, prefix="/transfers", tags=["Transfers"])

@@ -1,16 +1,15 @@
 """
 AccessControl - Centralized logic for Role-based permissions and access scopes.
 
-Updated to use dynamic RoleTemplates from database instead of hardcoded groups.
+Updated to use dynamic RoleTemplates from database.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional, Set
-from datetime import datetime, timezone
 
 from app.models.employee import Employee
-from app.models.role_template import RoleTemplate, EmployeeRoleAssignment, AccessScope
+from app.models.role_template import EmployeeRoleAssignment, AccessScope
 
 
 class AccessControl:
@@ -19,6 +18,9 @@ class AccessControl:
     
     Permissions come from RoleTemplate.permissions (JSONB).
     Access scope comes from EmployeeRoleAssignment.access_scope.
+    
+    Note: This class works synchronously with pre-loaded role_assignments.
+    For async operations (like group/hierarchy lookups), use helper functions.
     """
     
     def __init__(self, actor: Employee):
@@ -28,25 +30,24 @@ class AccessControl:
         Note: actor.role_assignments should be eagerly loaded (lazy="selectin").
         """
         self.actor = actor
-        self._effective_permissions: Optional[dict] = None
-        self._accessible_ids: Optional[Set[int]] = None
+        self._effective_permissions: dict = {}
+        self._accessible_ids: Set[int] = {actor.id}  # Always includes self
         self._has_global_access: bool = False
+        self._accessible_groups: Set[str] = set()
+        self._uses_hierarchy: bool = False
         
-        # Pre-compute permissions and access
+        # Pre-compute permissions and access from loaded assignments
         self._compute_effective_permissions()
     
     def _compute_effective_permissions(self):
         """Compute effective permissions from all role assignments."""
-        self._effective_permissions = {}
-        self._accessible_ids = {self.actor.id}  # Always includes self
-        
-        assignments = getattr(self.actor, 'role_assignments', []) or []
+        assignments = getattr(self.actor, 'role_assignments', None) or []
         
         for assignment in assignments:
             if not assignment.is_active:
                 continue
             
-            template = assignment.role_template
+            template = getattr(assignment, 'role_template', None)
             if not template:
                 continue
             
@@ -55,7 +56,7 @@ class AccessControl:
                 if enabled:
                     self._effective_permissions[perm] = True
             
-            # Compute accessible employee IDs based on scope
+            # Process access scope
             self._process_access_scope(assignment)
     
     def _process_access_scope(self, assignment: EmployeeRoleAssignment):
@@ -74,59 +75,52 @@ class AccessControl:
                 self._accessible_ids.update(assignment.accessible_employee_ids)
         
         elif scope == AccessScope.GROUP:
-            # Groups are handled separately by querying employees in those departments
-            # Store the groups for later lookup
-            if not hasattr(self, '_accessible_groups'):
-                self._accessible_groups = set()
             if assignment.accessible_groups:
                 self._accessible_groups.update(assignment.accessible_groups)
         
         elif scope == AccessScope.HIERARCHY:
-            # Hierarchy-based access uses manager/subordinate relationship
-            # Get all subordinates
-            subordinates = self._get_all_subordinates()
-            self._accessible_ids.update(s.id for s in subordinates)
+            # Mark that hierarchy lookup is needed
+            self._uses_hierarchy = True
     
     def can(self, permission: str) -> bool:
-        """
-        Check if the actor has a specific permission.
-        """
-        if self._effective_permissions is None:
-            self._compute_effective_permissions()
+        """Check if the actor has a specific permission."""
         return self._effective_permissions.get(permission, False)
     
     def can_act_for(self, target_employee_id: int) -> bool:
         """
         Check if actor can perform actions for target employee.
+        
+        Note: For complete check including groups/hierarchy, use
+        get_accessible_employee_ids_with_groups() async function.
         """
         # Self always allowed if they have any booking permission
         if self.actor.id == target_employee_id:
-            return any(self.can(p) for p in ['book_flights', 'book_hotels', 'book_ground'])
+            return True
         
         # Global access
         if self._has_global_access:
             return True
         
-        # Check if target is in accessible IDs
+        # Check if target is in directly accessible IDs (individuals)
         if target_employee_id in self._accessible_ids:
             return True
         
+        # Groups and hierarchy require async DB lookup
         return False
     
-    def get_accessible_employee_ids(self) -> Optional[List[int]]:
+    def get_direct_accessible_ids(self) -> Optional[Set[int]]:
         """
-        Get list of employee IDs this actor can access.
+        Get directly accessible employee IDs (self + individuals).
         Returns None for global access.
+        
+        Note: Does NOT include group/hierarchy - use async function for complete list.
         """
         if self._has_global_access:
             return None
-        
-        return list(self._accessible_ids)
+        return self._accessible_ids
     
     def get_travel_class_eligibility(self) -> List[str]:
-        """
-        Get list of travel classes this actor is eligible for.
-        """
+        """Get list of travel classes this actor is eligible for."""
         classes = []
         if self.can('economy_class'):
             classes.append('economy')
@@ -139,9 +133,7 @@ class AccessControl:
         return classes
     
     def is_eligible_for_class(self, travel_class: str) -> bool:
-        """
-        Check if actor is eligible for a specific travel class.
-        """
+        """Check if actor is eligible for a specific travel class."""
         class_map = {
             'economy': 'economy_class',
             'premium_economy': 'premium_economy_class',
@@ -150,30 +142,6 @@ class AccessControl:
         }
         perm = class_map.get(travel_class.lower())
         return self.can(perm) if perm else False
-    
-    def _get_all_subordinates(self) -> List[Employee]:
-        """
-        Get all subordinates using hierarchy (BFS traversal).
-        """
-        subordinates = []
-        
-        if not hasattr(self.actor, 'subordinates') or not self.actor.subordinates:
-            return subordinates
-        
-        queue = list(self.actor.subordinates)
-        visited = {self.actor.id}
-        
-        while queue:
-            current = queue.pop(0)
-            if current.id in visited:
-                continue
-            visited.add(current.id)
-            subordinates.append(current)
-            
-            if hasattr(current, 'subordinates') and current.subordinates:
-                queue.extend(current.subordinates)
-        
-        return subordinates
 
 
 async def get_accessible_employee_ids_with_groups(
@@ -182,23 +150,60 @@ async def get_accessible_employee_ids_with_groups(
     org_id
 ) -> Optional[List[int]]:
     """
-    Get accessible employee IDs including group-based access.
+    Get accessible employee IDs including group and hierarchy access.
     
-    This queries the database for employees in accessible groups.
+    This is the async version that queries the database.
+    Returns None for global access.
     """
     if access_control._has_global_access:
         return None
     
     accessible_ids = set(access_control._accessible_ids)
     
-    # Add employees from accessible groups
-    if hasattr(access_control, '_accessible_groups') and access_control._accessible_groups:
+    # Add employees from accessible groups (departments)
+    if access_control._accessible_groups:
         stmt = select(Employee.id).where(
             Employee.org_id == org_id,
+            Employee.is_active == True,
             Employee.department.in_(access_control._accessible_groups)
         )
         result = await db.execute(stmt)
         group_ids = [r[0] for r in result.all()]
         accessible_ids.update(group_ids)
     
-    return list(accessible_ids)
+    # Add subordinates if hierarchy scope is used
+    if access_control._uses_hierarchy:
+        subordinate_ids = await _get_all_subordinate_ids(db, access_control.actor.id)
+        accessible_ids.update(subordinate_ids)
+    
+    return list(accessible_ids) if accessible_ids else []
+
+
+async def _get_all_subordinate_ids(db: AsyncSession, manager_id: int) -> List[int]:
+    """
+    Get all subordinate IDs using recursive hierarchy traversal.
+    """
+    subordinate_ids = []
+    
+    # BFS to find all subordinates
+    queue = [manager_id]
+    visited = {manager_id}
+    
+    while queue:
+        current_id = queue.pop(0)
+        
+        # Find direct reports
+        stmt = select(Employee.id).where(
+            Employee.manager_id == current_id,
+            Employee.is_active == True
+        )
+        result = await db.execute(stmt)
+        direct_reports = [r[0] for r in result.all()]
+        
+        for sub_id in direct_reports:
+            if sub_id not in visited:
+                visited.add(sub_id)
+                subordinate_ids.append(sub_id)
+                queue.append(sub_id)
+    
+    return subordinate_ids

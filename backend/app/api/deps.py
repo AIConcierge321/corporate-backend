@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.employee import Employee
+from app.models.role_template import EmployeeRoleAssignment
 from app.schemas.auth import TokenPayload
 
 # Using OAuth2 scheme for Swagger UI convenience, though flow is SSO
@@ -31,10 +32,13 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
     
-    # Fetch User with Groups
+    # Fetch User with Groups and Role Assignments
     result = await db.execute(
         select(Employee)
-        .options(selectinload(Employee.groups))
+        .options(
+            selectinload(Employee.groups),
+            selectinload(Employee.role_assignments).selectinload(EmployeeRoleAssignment.role_template)
+        )
         .where(Employee.id == int(user_id))
     )
     user = result.scalars().first()
