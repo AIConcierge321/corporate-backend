@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     AIRPORT_TRANSFER_BASE_URL: str = "https://api.airporttransfer.com"
     AIRPORT_TRANSFER_USE_MOCK: bool = True  # Set to False when you have API key
     
+    # All Aboard Train API (Rail)
+    # Docs: https://docs.allaboard.eu/
+    ALLABOARD_API_KEY: Optional[str] = None
+    ALLABOARD_BASE_URL: str = "https://api-gateway.allaboard.eu"
+    ALLABOARD_USE_TEST: bool = False  # Use production environment
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,
@@ -30,3 +36,4 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
