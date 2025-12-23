@@ -380,31 +380,29 @@ class AllAboardClient:
         
         GraphQL: query { getJourneyOffer(...) }
         """
+        # The getJourneyOffer returns a JourneyOffer type directly
         gql = """
         query GetJourneyOffer(
             $journey: ID!,
             $passengers: [PassengerPlaceholderInput!]!,
-            $currency: Currency
+            $currency: String
         ) {
             getJourneyOffer(
                 journey: $journey,
                 passengers: $passengers,
                 currency: $currency
             ) {
-                offers {
-                    uid
-                    price {
-                        amount
-                        currency
-                    }
-                    class
-                    flexibility
-                    operator {
-                        name
-                    }
-                    conditions
+                uid
+                price {
+                    amount
+                    currency
                 }
-                requirements
+                class
+                flexibility
+                operator {
+                    name
+                }
+                conditions
             }
         }
         """
@@ -421,27 +419,29 @@ class AllAboardClient:
         }
         
         data = await self._execute_graphql(gql, variables)
-        offer_data = data.get("getJourneyOffer", {})
+        offer_data = data.get("getJourneyOffer")
         
-        offers = [
-            Offer(
-                uid=o["uid"],
-                price=Price(
-                    amount=o["price"]["amount"],
-                    currency=o["price"]["currency"]
-                ),
-                service_class=ServiceClass(o.get("class", "STANDARD")),
-                flexibility=Flexibility(o.get("flexibility", "NON_FLEX")),
-                operator=o.get("operator", {}).get("name", ""),
-                conditions=o.get("conditions")
+        # The API returns a single offer, not a list
+        offers = []
+        if offer_data:
+            offers.append(
+                Offer(
+                    uid=offer_data["uid"],
+                    price=Price(
+                        amount=offer_data["price"]["amount"],
+                        currency=offer_data["price"]["currency"]
+                    ),
+                    service_class=ServiceClass(offer_data.get("class", "STANDARD")),
+                    flexibility=Flexibility(offer_data.get("flexibility", "NON_FLEX")),
+                    operator=offer_data.get("operator", {}).get("name", ""),
+                    conditions=offer_data.get("conditions")
+                )
             )
-            for o in offer_data.get("offers", [])
-        ]
         
         return OfferResponse(
             journey_uid=journey_uid,
             offers=offers,
-            requirements=offer_data.get("requirements")
+            requirements=None
         )
     
     # ==================== Booking ====================
