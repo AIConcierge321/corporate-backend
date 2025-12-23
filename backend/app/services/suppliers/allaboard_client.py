@@ -83,7 +83,8 @@ class AllAboardClient:
         if operation_name:
             payload["operationName"] = operation_name
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # MED-004: Reduced timeout from 30s to 15s
+        async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 response = await client.post(
                     self.base_url,

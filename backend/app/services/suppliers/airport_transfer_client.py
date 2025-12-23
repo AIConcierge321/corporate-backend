@@ -64,7 +64,7 @@ class AirportTransferClient:
         url = f"{self.base_url}{endpoint}"
         headers = self._get_headers()
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:  # MED-004: Reduced timeout
             try:
                 response = await client.request(
                     method=method,

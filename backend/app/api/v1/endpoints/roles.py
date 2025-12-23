@@ -421,7 +421,16 @@ async def remove_role_assignment(
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
-    stmt = select(EmployeeRoleAssignment).where(EmployeeRoleAssignment.id == assignment_id)
+    
+    # MED-007: Add org_id check to prevent cross-org deletion
+    stmt = (
+        select(EmployeeRoleAssignment)
+        .join(Employee, EmployeeRoleAssignment.employee_id == Employee.id)
+        .where(
+            EmployeeRoleAssignment.id == assignment_id,
+            Employee.org_id == current_user.org_id  # Scope to org
+        )
+    )
     result = await db.execute(stmt)
     assignment = result.scalars().first()
     
@@ -430,3 +439,4 @@ async def remove_role_assignment(
     
     await db.delete(assignment)
     await db.commit()
+

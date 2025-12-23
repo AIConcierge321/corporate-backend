@@ -52,6 +52,11 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 
+# 3. HTTPS Redirect in production (MED-002)
+if not settings.DEV_MODE:
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    app.add_middleware(HTTPSRedirectMiddleware)
+
 # 3. Request ID middleware for tracing
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
