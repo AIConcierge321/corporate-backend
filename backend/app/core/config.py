@@ -46,8 +46,10 @@ class Settings(BaseSettings):
     
     # AirportTransfer API (Ground Transport)
     AIRPORT_TRANSFER_API_KEY: Optional[str] = None
-    AIRPORT_TRANSFER_BASE_URL: str = "https://api.airporttransfer.com"
-    AIRPORT_TRANSFER_USE_MOCK: bool = True
+    AIRPORT_TRANSFER_BASE_URL: str = "https://api.airporttransfer.com/api/partner"
+    AIRPORT_TRANSFER_SANDBOX_URL: str = "https://sandbox.airporttransfer.tech/api/partner"
+    AIRPORT_TRANSFER_USE_SANDBOX: bool = True  # Use sandbox for dev/test
+    AIRPORT_TRANSFER_USE_MOCK: bool = False  # Set to True to use mock data instead of API
     
     # All Aboard Train API (Rail)
     ALLABOARD_API_KEY: Optional[str] = None

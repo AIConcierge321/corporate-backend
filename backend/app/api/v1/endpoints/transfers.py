@@ -31,11 +31,21 @@ async def get_transfer_api_status() -> Any:
     """
     Get transfer API status (mock vs real).
     """
-    using_real = not settings.AIRPORT_TRANSFER_USE_MOCK and settings.AIRPORT_TRANSFER_API_KEY
+    if settings.AIRPORT_TRANSFER_USE_MOCK or not settings.AIRPORT_TRANSFER_API_KEY:
+        mode = "MOCK"
+        base_url = "mock"
+    elif settings.AIRPORT_TRANSFER_USE_SANDBOX:
+        mode = "SANDBOX"
+        base_url = settings.AIRPORT_TRANSFER_SANDBOX_URL
+    else:
+        mode = "PRODUCTION"
+        base_url = settings.AIRPORT_TRANSFER_BASE_URL
+    
     return {
-        "mode": "LIVE" if using_real else "MOCK",
+        "provider": "AirportTransfer.com",
+        "mode": mode,
         "api_key_configured": bool(settings.AIRPORT_TRANSFER_API_KEY),
-        "base_url": settings.AIRPORT_TRANSFER_BASE_URL if using_real else "mock"
+        "base_url": base_url
     }
 
 

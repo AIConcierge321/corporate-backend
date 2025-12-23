@@ -39,12 +39,16 @@ class TransferStatus(str, Enum):
 # ==================== Location ====================
 
 class Location(BaseModel):
-    """Location for pickup or dropoff."""
-    location_id: str | int = Field(..., description="Airport ID, IATA code, or Google Place ID")
+    """Location for pickup or dropoff.
+    
+    For AIRPORT: use location_id (IATA code like 'AMS')
+    For PLACE: use name + lat + lng (GPS coordinates)
+    """
+    location_id: Optional[str | int] = None  # Airport IATA code or ID
     type: LocationType
-    name: Optional[str] = None  # For display
-    lat: Optional[float] = None  # For coordinates
-    lng: Optional[float] = None
+    name: Optional[str] = None  # For display (required for PLACE)
+    lat: Optional[float] = None  # GPS latitude (required for PLACE)
+    lng: Optional[float] = None  # GPS longitude (required for PLACE)
 
 
 class Travelers(BaseModel):

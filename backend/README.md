@@ -31,10 +31,17 @@ High-performance asynchronous backend for the Corporate Travel Management Platfo
 | Service | Status | API Provider |
 |---------|--------|--------------|
 | **Train Booking** | ✅ Real API | All Aboard (30+ operators, 17K+ stations) |
+| **Airport Transfers** | ✅ Real API | AirportTransfer.com (sandbox + production) |
 | **Flight Search** | 🔶 Mock | Needs Duffel/Amadeus |
 | **Hotel Search** | 🔶 Mock | Needs Booking.com/Expedia |
-| **Airport Transfers** | 🔶 Mock | Ready for AirportTransfer.com |
 | **Destinations** | ✅ | Static curated data |
+
+### Airport Transfers API (AirportTransfer.com Integration)
+- **Airport Search** - Search airports by name, code, or city
+- **Quote Engine** - Get vehicle options with pricing (EUR, USD, GBP)
+- **Booking Flow** - Create, view, and cancel bookings
+- **Production Features** - Retry logic, circuit breaker, rate limiting
+- **Cancellation** - Free cancellation up to 48 hours before service
 
 ### Train API (All Aboard Integration)
 - **Station Search** - 17,000+ European stations
@@ -58,19 +65,28 @@ cd corporate-backend/backend
 ```
 
 ### 2. Environment Setup
-Create a `.env` file:
+Copy `.env.example` to `.env` and configure:
 
 ```bash
+cp .env.example .env
+```
+
+**Required variables:**
+```bash
+# Database & Redis
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5435/corporate_travel
 REDIS_URL=redis://localhost:6385/0
+
+# JWT Secret (generate with: openssl rand -hex 32)
 SECRET_KEY=your-super-secret-key-change-this
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-REFRESH_TOKEN_EXPIRE_DAYS=7
 
 # External APIs
-ALLABOARD_API_KEY=your-allaboard-api-key          # Train booking
-AIRPORT_TRANSFER_API_KEY=your-transfer-api-key    # Airport transfers
+ALLABOARD_API_KEY=your-allaboard-api-key
+AIRPORT_TRANSFER_API_KEY=your-transfer-api-key
+
+# Environment Mode (for development)
+AIRPORT_TRANSFER_USE_SANDBOX=true  # Use sandbox for dev/test
+DEV_MODE=false                      # NEVER set to true in production!
 ```
 
 ### 3. Start Infrastructure
