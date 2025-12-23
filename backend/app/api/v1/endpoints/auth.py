@@ -4,13 +4,60 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.schemas.auth import SSOCallbackRequest, Token, EmployeeResponse
 from app.models.employee import Employee
-from app.core import config
+from app.core.config import settings
 from app.services import auth_service
 from app.api import deps
 from app.core.permissions import get_permissions_for_groups
 from typing import Any
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def _verify_oidc_token(id_token: str) -> dict:
+    """
+    Verify OIDC ID token from Identity Provider.
+    
+    TODO: Implement real OIDC validation when IdP is configured:
+    - Fetch JWKS from IdP's /.well-known/openid-configuration
+    - Verify token signature
+    - Validate issuer, audience, and expiration
+    """
+    # This is a placeholder for real OIDC implementation
+    # When you have IdP credentials, implement proper validation here
+    raise NotImplementedError(
+        "Real OIDC validation not yet implemented. "
+        "Set DEV_MODE=true for local development."
+    )
+
+
+def _dev_mode_mock_auth(id_token: str) -> dict:
+    """
+    Development-only mock authentication.
+    
+    NEVER use in production - allows any email to authenticate.
+    """
+    if not settings.DEV_MODE:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="OIDC authentication not configured. Contact administrator."
+        )
+    
+    # Log warning for every mock auth
+    logger.warning("=" * 50)
+    logger.warning("⚠️  MOCK AUTH USED - DEV_MODE is enabled!")
+    logger.warning("⚠️  This should NEVER appear in production logs!")
+    logger.warning("=" * 50)
+    
+    # Allow switching user by passing email in id_token for dev/test
+    if "@" in id_token:
+        email = id_token
+    else:
+        email = "alice@corporate.com"
+    
+    return {"email": email, "sub": "dev_mock_" + email}
+
 
 @router.post("/sso/callback", response_model=Token)
 async def sso_callback(
@@ -19,24 +66,25 @@ async def sso_callback(
 ) -> Any:
     """
     Exchange ID Token from IdP for internal Access Token.
-    1. Validate ID Token (Signature, Issuer, Aud) - Mocked for now.
-    2. Lookup user by email/external_id in DB (Mirrored via SCIM).
-    3. If user exists & active -> Issue internal JWT.
-    4. If user missing -> Deny (Deny-by-default, SCIM must provision first).
+    
+    Flow:
+    1. Validate ID Token (Signature, Issuer, Aud)
+    2. Lookup user by email/external_id in DB (Mirrored via SCIM)
+    3. If user exists & active -> Issue internal JWT
+    4. If user missing -> Deny (Deny-by-default, SCIM must provision first)
     """
-    # TODO: Real OIDC Validation
-    # payload = verify_oidc_token(sso_in.id_token)
+    # Try real OIDC first, fall back to dev mode mock
+    try:
+        token_payload = await _verify_oidc_token(sso_in.id_token)
+        email = token_payload.get("email")
+        external_id = token_payload.get("sub")
+    except NotImplementedError:
+        # Real OIDC not implemented - try dev mode
+        mock_payload = _dev_mode_mock_auth(sso_in.id_token)
+        email = mock_payload["email"]
+        external_id = mock_payload["sub"]
     
-    # Mock Validation
-    # Allow switching user by passing email in id_token for dev/test
-    if "@" in sso_in.id_token:
-         email = sso_in.id_token
-    else:
-         email = "alice@corporate.com" 
-    
-    external_id = "okta_123"   # Extract from token
-    
-    # Check DB
+    # Check DB for provisioned user
     result = await db.execute(select(Employee).where(Employee.email == email))
     user = result.scalars().first()
     
@@ -53,6 +101,7 @@ async def sso_callback(
     access_token = auth_service.create_internal_token(user)
     return Token(access_token=access_token, token_type="bearer")
 
+
 @router.get("/me", response_model=EmployeeResponse)
 async def read_users_me(
     current_user: Employee = Depends(deps.get_current_user),
@@ -60,12 +109,9 @@ async def read_users_me(
     """
     Get current user profile with permissions.
     """
-    # Ensure groups are loaded (lazy loading might require explicit join in deps)
     group_names = [g.name for g in current_user.groups]
     permissions = get_permissions_for_groups(group_names)
     
-    # We construct the response manually to inject permissions, 
-    # relying on Pydantic to map the rest from the ORM object
     return EmployeeResponse(
         id=current_user.id,
         email=current_user.email,
@@ -77,3 +123,4 @@ async def read_users_me(
         groups=group_names,
         permissions=list(permissions)
     )
+

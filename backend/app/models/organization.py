@@ -37,3 +37,5 @@ class Organization(Base):
     employees: Mapped[List["Employee"]] = relationship(back_populates="organization")
     groups: Mapped[List["DirectoryGroup"]] = relationship(back_populates="organization")
     role_templates: Mapped[List["RoleTemplate"]] = relationship(back_populates="organization")
+    scim_tokens: Mapped[List["ScimToken"]] = relationship(back_populates="organization")
+

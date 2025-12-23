@@ -1,45 +1,103 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from datetime import datetime, timezone
 from app.db.session import get_db
 from app.schemas.scim import SCIMUserCreate, SCIMUserResponse
 from app.models.employee import Employee
 from app.models.organization import Organization
-from typing import Any
+from app.models.scim_token import ScimToken
+from app.core.config import settings
+from typing import Any, Optional
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-async def validate_scim_token(authorization: str = Header(None)):
+
+async def validate_scim_token(
+    authorization: str = Header(None, alias="Authorization"),
+    db: AsyncSession = Depends(get_db)
+) -> Organization:
     """
-    Validate Bearer token from IdP.
-    In real world, this matches a long-lived 'SCIM Token' generated for the Org.
+    Validate Bearer token from IdP and return associated organization.
+    
+    Token format: "Bearer <token>"
     """
     if not authorization:
-        raise HTTPException(status_code=401, detail="Missing SCIM Token")
-    # TODO: Lookup Org by Token
-    return True
+        logger.warning("SCIM request without Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Missing Authorization header"
+        )
+    
+    # Parse Bearer token
+    parts = authorization.split(" ")
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header format. Expected: Bearer <token>"
+        )
+    
+    raw_token = parts[1]
+    
+    # DEV_MODE: Allow a special dev token for local testing
+    if settings.DEV_MODE and raw_token == "dev-scim-token":
+        logger.warning("⚠️ DEV_MODE: Using development SCIM token!")
+        # Return first org for dev mode
+        result = await db.execute(select(Organization))
+        org = result.scalars().first()
+        if org:
+            return org
+        # Create default org if none exists in dev mode
+        org = Organization(name="Default Org (Dev)")
+        db.add(org)
+        await db.flush()
+        return org
+    
+    # Production: Validate token against database
+    token_hash = ScimToken.hash_token(raw_token)
+    
+    stmt = select(ScimToken).options(
+        selectinload(ScimToken.organization)
+    ).where(
+        ScimToken.token_hash == token_hash,
+        ScimToken.is_active == True
+    )
+    result = await db.execute(stmt)
+    scim_token = result.scalars().first()
+    
+    if not scim_token:
+        logger.warning(f"Invalid SCIM token attempted")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired SCIM token"
+        )
+    
+    # Update last used timestamp
+    scim_token.last_used_at = datetime.now(timezone.utc)
+    
+    logger.info(f"SCIM token validated for org: {scim_token.organization.name}")
+    return scim_token.organization
+
 
 @router.post("/Users", status_code=201)
 async def create_scim_user(
     user_in: SCIMUserCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    authorized: bool = Depends(validate_scim_token)
+    org: Organization = Depends(validate_scim_token),
+    db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
     SCIM v2 Create User
-    """
-    # 1. Find Org (Hardcoded for single-tenant dev for now)
-    result = await db.execute(select(Organization))
-    org = result.scalars().first()
-    if not org:
-        # Create default org if missing
-        org = Organization(name="Default Org")
-        db.add(org)
-        await db.flush()
     
-    # 2. Check overlap
+    Token must be valid and associated with an organization.
+    """
+    # Organization is now properly scoped via token validation
     email = user_in.emails[0].value
+    
+    # Check for existing user
     result = await db.execute(select(Employee).where(Employee.email == email))
     existing = result.scalars().first()
     
@@ -47,10 +105,10 @@ async def create_scim_user(
         # SCIM requires 409 Conflict if exists
         raise HTTPException(status_code=409, detail="User already exists")
         
-    # 3. Create
+    # Create user scoped to the authenticated organization
     new_user = Employee(
         email=email,
-        external_user_id=user_in.userName, # Or externalId field
+        external_user_id=user_in.userName,
         first_name=user_in.name.givenName,
         last_name=user_in.name.familyName,
         full_name=f"{user_in.name.givenName} {user_in.name.familyName}",
@@ -67,7 +125,9 @@ async def create_scim_user(
     await db.commit()
     await db.refresh(new_user)
     
-    # 4. Return SCIM Response
+    logger.info(f"SCIM: Created user {email} for org {org.name}")
+    
+    # Return SCIM Response
     return {
         "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
         "id": str(new_user.id),
@@ -80,3 +140,4 @@ async def create_scim_user(
             "location": str(request.url)
         }
     }
+

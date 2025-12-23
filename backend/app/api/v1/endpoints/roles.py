@@ -4,6 +4,8 @@ Role Management API Endpoints
 - Role Templates (CRUD)
 - Role Assignments
 - Permissions listing
+
+SECURITY: Template and assignment mutations require 'manage_roles' permission.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from typing import Any, List
 from uuid import UUID
+import logging
 
 from app.db.session import get_db
 from app.api import deps
@@ -23,9 +26,25 @@ from app.schemas.role import (
     EmployeeRolesResponse, AvailablePermissionsResponse, PermissionCategory, PermissionInfo,
     AccessScopeEnum
 )
+from app.core.access_control import AccessControl
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_manage_roles(current_user: Employee) -> None:
+    """
+    Check if user has permission to manage roles.
+    Raises HTTPException if not authorized.
+    """
+    ac = AccessControl(current_user)
+    if not ac.can("manage_roles"):
+        logger.warning(f"User {current_user.id} attempted role management without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to manage roles"
+        )
 
 
 # ==================== Permissions ====================
@@ -98,7 +117,11 @@ async def create_role_template(
 ) -> Any:
     """
     Create a new role template.
+    
+    Requires: manage_roles permission
     """
+    _require_manage_roles(current_user)
+    
     # Validate permissions
     invalid_perms = set(template_in.permissions.keys()) - set(AVAILABLE_PERMISSIONS.keys())
     if invalid_perms:
@@ -131,6 +154,8 @@ async def get_role_template(
 ) -> Any:
     """
     Get a specific role template.
+    
+    Note: Read access is allowed for all authenticated users.
     """
     stmt = select(RoleTemplate).where(
         RoleTemplate.id == template_id,
@@ -154,7 +179,10 @@ async def update_role_template(
 ) -> Any:
     """
     Update a role template.
+    
+    Requires: manage_roles permission
     """
+    _require_manage_roles(current_user)
     stmt = select(RoleTemplate).where(
         RoleTemplate.id == template_id,
         RoleTemplate.org_id == current_user.org_id
@@ -198,7 +226,10 @@ async def delete_role_template(
 ) -> None:
     """
     Delete a role template (non-system only).
+    
+    Requires: manage_roles permission
     """
+    _require_manage_roles(current_user)
     stmt = select(RoleTemplate).where(
         RoleTemplate.id == template_id,
         RoleTemplate.org_id == current_user.org_id
@@ -226,7 +257,10 @@ async def assign_role(
 ) -> Any:
     """
     Assign a role template to an employee with access scope.
+    
+    Requires: manage_roles permission
     """
+    _require_manage_roles(current_user)
     # Verify template exists
     stmt = select(RoleTemplate).where(
         RoleTemplate.id == assignment_in.role_template_id,
@@ -383,7 +417,10 @@ async def remove_role_assignment(
 ) -> None:
     """
     Remove a role assignment.
+    
+    Requires: manage_roles permission
     """
+    _require_manage_roles(current_user)
     stmt = select(EmployeeRoleAssignment).where(EmployeeRoleAssignment.id == assignment_id)
     result = await db.execute(stmt)
     assignment = result.scalars().first()
