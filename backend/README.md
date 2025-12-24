@@ -9,6 +9,7 @@ High-performance asynchronous backend for the Corporate Travel Management Platfo
 - **Caching & Queues:** Redis (with `redis-py` async)
 - **Authentication:** OAuth2/SSO with JWT, SCIM user provisioning
 - **Package Manager:** [uv](https://github.com/astral-sh/uv) (Blazing fast Python package installer)
+- **Code Quality:** [Ruff](https://docs.astral.sh/ruff/) v0.14.10 (10-100x faster than traditional linters)
 - **Migrations:** Alembic
 - **Testing:** Pytest (100% passing)
 
@@ -108,6 +109,59 @@ uv run uvicorn app.main:app --reload
 
 - **API Docs:** http://localhost:8000/docs
 - **Health Check:** http://localhost:8000/api/v1/health
+
+---
+
+## 📐 Code Quality & Development
+
+### Linting & Formatting
+
+This project uses **Ruff** (v0.14.10) - an extremely fast Python linter and formatter written in Rust.
+
+```bash
+# Check code for issues
+uv run ruff check ./app
+
+# Auto-fix issues
+uv run ruff check --fix ./app
+
+# Format code
+uv run ruff format ./app
+
+# Both in one command
+uv run ruff check --fix ./app && uv run ruff format ./app
+```
+
+### Pre-commit Hooks
+
+Add to `.git/hooks/pre-commit`:
+```bash
+#!/bin/bash
+uv run ruff check --fix ./app
+uv run ruff format ./app
+```
+
+Or use [pre-commit](https://pre-commit.com/):
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+```
+
+### Code Standards
+
+- ✅ **100% Ruff compliant** - All code passes linting
+- ✅ **FastAPI patterns recognized** - Proper dependency injection
+- ✅ **Async/await throughout** - Modern Python patterns
+- ✅ **Type hints** - Full type coverage
+- ✅ **SQLAlchemy 2.0** - Modern ORM patterns
+
+See [RUFF_USAGE.md](./RUFF_USAGE.md) for detailed configuration.
 
 ---
 

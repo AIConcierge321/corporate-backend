@@ -8,26 +8,39 @@ Role Management API Endpoints
 SECURITY: Template and assignment mutations require 'manage_roles' permission.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import joinedload
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from typing import Any, List
-from uuid import UUID
 import logging
+from typing import Any
+from uuid import UUID
 
-from app.db.session import get_db
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
+
 from app.api import deps
-from app.models.employee import Employee
-from app.models.role_template import RoleTemplate, EmployeeRoleAssignment, AccessScope, AVAILABLE_PERMISSIONS
-from app.schemas.role import (
-    RoleTemplateCreate, RoleTemplateUpdate, RoleTemplateResponse, RoleTemplateList,
-    RoleAssignmentCreate, RoleAssignmentUpdate, RoleAssignmentResponse,
-    EmployeeRolesResponse, AvailablePermissionsResponse, PermissionCategory, PermissionInfo,
-    AccessScopeEnum
-)
 from app.core.access_control import AccessControl
 from app.core.rate_limit import limiter
+from app.db.session import get_db
+from app.models.employee import Employee
+from app.models.role_template import (
+    AVAILABLE_PERMISSIONS,
+    AccessScope,
+    EmployeeRoleAssignment,
+    RoleTemplate,
+)
+from app.schemas.role import (
+    AccessScopeEnum,
+    AvailablePermissionsResponse,
+    EmployeeRolesResponse,
+    PermissionCategory,
+    PermissionInfo,
+    RoleAssignmentCreate,
+    RoleAssignmentResponse,
+    RoleTemplateCreate,
+    RoleTemplateList,
+    RoleTemplateResponse,
+    RoleTemplateUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +55,11 @@ def _require_manage_roles(current_user: Employee) -> None:
     ac = AccessControl(current_user)
     if not ac.can("manage_roles"):
         logger.warning(f"User {current_user.id} attempted role management without permission")
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have permission to manage roles"
-        )
+        raise HTTPException(status_code=403, detail="You don't have permission to manage roles")
 
 
 # ==================== Permissions ====================
+
 
 @router.get("/permissions", response_model=AvailablePermissionsResponse)
 @limiter.limit("60/minute")
@@ -64,7 +75,7 @@ async def list_available_permissions(request: Request) -> Any:
         "Visibility": [],
         "Administration": [],
     }
-    
+
     for key, desc in AVAILABLE_PERMISSIONS.items():
         if key.startswith("book_"):
             cat = "Booking"
@@ -76,22 +87,22 @@ async def list_available_permissions(request: Request) -> Any:
             cat = "Visibility"
         else:
             cat = "Administration"
-        
+
         categories_map[cat].append(PermissionInfo(key=key, description=desc, category=cat))
-    
+
     categories = [
         PermissionCategory(name=name, permissions=perms)
         for name, perms in categories_map.items()
         if perms
     ]
-    
+
     return AvailablePermissionsResponse(
-        categories=categories,
-        all_permissions=AVAILABLE_PERMISSIONS
+        categories=categories, all_permissions=AVAILABLE_PERMISSIONS
     )
 
 
 # ==================== Role Templates ====================
+
 
 @router.get("/templates", response_model=RoleTemplateList)
 @limiter.limit("30/minute")
@@ -106,10 +117,9 @@ async def list_role_templates(
     stmt = select(RoleTemplate).where(RoleTemplate.org_id == current_user.org_id)
     result = await db.execute(stmt)
     templates = result.scalars().all()
-    
+
     return RoleTemplateList(
-        templates=[RoleTemplateResponse.model_validate(t) for t in templates],
-        total=len(templates)
+        templates=[RoleTemplateResponse.model_validate(t) for t in templates], total=len(templates)
     )
 
 
@@ -123,19 +133,18 @@ async def create_role_template(
 ) -> Any:
     """
     Create a new role template.
-    
+
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
-    
+
     # Validate permissions
     invalid_perms = set(template_in.permissions.keys()) - set(AVAILABLE_PERMISSIONS.keys())
     if invalid_perms:
         raise HTTPException(
-            status_code=400,
-            detail=f"Invalid permissions: {', '.join(invalid_perms)}"
+            status_code=400, detail=f"Invalid permissions: {', '.join(invalid_perms)}"
         )
-    
+
     template = RoleTemplate(
         org_id=current_user.org_id,
         name=template_in.name,
@@ -144,11 +153,11 @@ async def create_role_template(
         default_access_scope=AccessScope(template_in.default_access_scope.value),
         is_system=False,
     )
-    
+
     db.add(template)
     await db.commit()
     await db.refresh(template)
-    
+
     return RoleTemplateResponse.model_validate(template)
 
 
@@ -162,19 +171,18 @@ async def get_role_template(
 ) -> Any:
     """
     Get a specific role template.
-    
+
     Note: Read access is allowed for all authenticated users.
     """
     stmt = select(RoleTemplate).where(
-        RoleTemplate.id == template_id,
-        RoleTemplate.org_id == current_user.org_id
+        RoleTemplate.id == template_id, RoleTemplate.org_id == current_user.org_id
     )
     result = await db.execute(stmt)
     template = result.scalars().first()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Role template not found")
-    
+
     return RoleTemplateResponse.model_validate(template)
 
 
@@ -189,29 +197,27 @@ async def update_role_template(
 ) -> Any:
     """
     Update a role template.
-    
+
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
     stmt = select(RoleTemplate).where(
-        RoleTemplate.id == template_id,
-        RoleTemplate.org_id == current_user.org_id
+        RoleTemplate.id == template_id, RoleTemplate.org_id == current_user.org_id
     )
     result = await db.execute(stmt)
     template = result.scalars().first()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Role template not found")
-    
+
     # Validate permissions if provided
     if template_in.permissions:
         invalid_perms = set(template_in.permissions.keys()) - set(AVAILABLE_PERMISSIONS.keys())
         if invalid_perms:
             raise HTTPException(
-                status_code=400,
-                detail=f"Invalid permissions: {', '.join(invalid_perms)}"
+                status_code=400, detail=f"Invalid permissions: {', '.join(invalid_perms)}"
             )
-    
+
     # Update fields
     if template_in.name is not None:
         template.name = template_in.name
@@ -221,10 +227,10 @@ async def update_role_template(
         template.permissions = template_in.permissions
     if template_in.default_access_scope is not None:
         template.default_access_scope = AccessScope(template_in.default_access_scope.value)
-    
+
     await db.commit()
     await db.refresh(template)
-    
+
     return RoleTemplateResponse.model_validate(template)
 
 
@@ -238,28 +244,28 @@ async def delete_role_template(
 ) -> None:
     """
     Delete a role template (non-system only).
-    
+
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
     stmt = select(RoleTemplate).where(
-        RoleTemplate.id == template_id,
-        RoleTemplate.org_id == current_user.org_id
+        RoleTemplate.id == template_id, RoleTemplate.org_id == current_user.org_id
     )
     result = await db.execute(stmt)
     template = result.scalars().first()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Role template not found")
-    
+
     if template.is_system:
         raise HTTPException(status_code=400, detail="Cannot delete system role templates")
-    
+
     await db.delete(template)
     await db.commit()
 
 
 # ==================== Role Assignments ====================
+
 
 @router.post("/assign", response_model=RoleAssignmentResponse, status_code=201)
 @limiter.limit("20/minute")
@@ -271,39 +277,43 @@ async def assign_role(
 ) -> Any:
     """
     Assign a role template to an employee with access scope.
-    
+
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
     # Verify template exists
     stmt = select(RoleTemplate).where(
         RoleTemplate.id == assignment_in.role_template_id,
-        RoleTemplate.org_id == current_user.org_id
+        RoleTemplate.org_id == current_user.org_id,
     )
     result = await db.execute(stmt)
     template = result.scalars().first()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Role template not found")
-    
+
     # Verify employee exists
     stmt = select(Employee).where(
-        Employee.id == assignment_in.employee_id,
-        Employee.org_id == current_user.org_id
+        Employee.id == assignment_in.employee_id, Employee.org_id == current_user.org_id
     )
     result = await db.execute(stmt)
     employee = result.scalars().first()
-    
+
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    
+
     # Validate scope requirements
-    if assignment_in.access_scope == AccessScopeEnum.INDIVIDUALS and not assignment_in.accessible_employee_ids:
-        raise HTTPException(status_code=400, detail="accessible_employee_ids required for 'individuals' scope")
-    
+    if (
+        assignment_in.access_scope == AccessScopeEnum.INDIVIDUALS
+        and not assignment_in.accessible_employee_ids
+    ):
+        raise HTTPException(
+            status_code=400, detail="accessible_employee_ids required for 'individuals' scope"
+        )
+
     if assignment_in.access_scope == AccessScopeEnum.GROUP and not assignment_in.accessible_groups:
         raise HTTPException(status_code=400, detail="accessible_groups required for 'group' scope")
-    
+
     assignment = EmployeeRoleAssignment(
         employee_id=assignment_in.employee_id,
         role_template_id=assignment_in.role_template_id,
@@ -312,11 +322,11 @@ async def assign_role(
         accessible_groups=assignment_in.accessible_groups,
         is_active=True,
     )
-    
+
     db.add(assignment)
     await db.commit()
     await db.refresh(assignment)
-    
+
     return RoleAssignmentResponse(
         id=assignment.id,
         employee_id=assignment.employee_id,
@@ -344,39 +354,38 @@ async def get_employee_roles(
     """
     # Get employee
     stmt = select(Employee).where(
-        Employee.id == employee_id,
-        Employee.org_id == current_user.org_id
+        Employee.id == employee_id, Employee.org_id == current_user.org_id
     )
     result = await db.execute(stmt)
     employee = result.scalars().first()
-    
+
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    
+
     # Get assignments with templates (eagerly load role_template)
     stmt = (
         select(EmployeeRoleAssignment)
         .options(joinedload(EmployeeRoleAssignment.role_template))
         .where(
             EmployeeRoleAssignment.employee_id == employee_id,
-            EmployeeRoleAssignment.is_active == True
+            EmployeeRoleAssignment.is_active,
         )
     )
     result = await db.execute(stmt)
     assignments = result.scalars().unique().all()
-    
+
     # Calculate effective permissions and accessible employees
     effective_permissions = {}
     all_accessible_ids = set()
     has_all_access = False
-    
+
     for assignment in assignments:
         # Merge permissions
         template = assignment.role_template
         for perm, enabled in template.permissions.items():
             if enabled:
                 effective_permissions[perm] = True
-        
+
         # Calculate accessible employees
         if assignment.access_scope == AccessScope.ALL:
             has_all_access = True
@@ -392,7 +401,7 @@ async def get_employee_roles(
             if assignment.accessible_groups:
                 group_stmt = select(Employee.id).where(
                     Employee.org_id == current_user.org_id,
-                    Employee.department.in_(assignment.accessible_groups)
+                    Employee.department.in_(assignment.accessible_groups),
                 )
                 group_result = await db.execute(group_stmt)
                 group_ids = [r[0] for r in group_result.all()]
@@ -400,10 +409,9 @@ async def get_employee_roles(
         elif assignment.access_scope == AccessScope.HIERARCHY:
             # Use manager hierarchy - handled by AccessControl
             all_accessible_ids.add(employee_id)
-    
-    assignment_responses = []
-    for a in assignments:
-        assignment_responses.append(RoleAssignmentResponse(
+
+    assignment_responses = [
+        RoleAssignmentResponse(
             id=a.id,
             employee_id=a.employee_id,
             role_template_id=a.role_template_id,
@@ -414,8 +422,10 @@ async def get_employee_roles(
             is_active=a.is_active,
             created_at=a.created_at,
             updated_at=a.updated_at,
-        ))
-    
+        )
+        for a in assignments
+    ]
+
     return EmployeeRolesResponse(
         employee_id=employee_id,
         employee_name=employee.full_name,
@@ -435,26 +445,25 @@ async def remove_role_assignment(
 ) -> None:
     """
     Remove a role assignment.
-    
+
     Requires: manage_roles permission
     """
     _require_manage_roles(current_user)
-    
+
     # MED-007: Add org_id check to prevent cross-org deletion
     stmt = (
         select(EmployeeRoleAssignment)
         .join(Employee, EmployeeRoleAssignment.employee_id == Employee.id)
         .where(
             EmployeeRoleAssignment.id == assignment_id,
-            Employee.org_id == current_user.org_id  # Scope to org
+            Employee.org_id == current_user.org_id,  # Scope to org
         )
     )
     result = await db.execute(stmt)
     assignment = result.scalars().first()
-    
+
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
-    
+
     await db.delete(assignment)
     await db.commit()
-

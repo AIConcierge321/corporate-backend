@@ -1,12 +1,15 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.audit import AuditLog
 from uuid import UUID
-from typing import Optional
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.audit import AuditLog
+
 
 class AuditService:
     """
     Service to record audit logs for compliance and debugging.
     """
+
     @staticmethod
     def log(
         db: AsyncSession,
@@ -14,12 +17,12 @@ class AuditService:
         entity_id: UUID,
         actor_id: int,
         action: str,
-        from_state: Optional[str] = None,
-        to_state: Optional[str] = None,
-        details: Optional[dict] = None
+        from_state: str | None = None,
+        to_state: str | None = None,
+        details: dict | None = None,
     ):
         """
-        Adds an audit log entry to the session. 
+        Adds an audit log entry to the session.
         Does NOT commit; caller must commit.
         """
         log_entry = AuditLog(
@@ -29,6 +32,6 @@ class AuditService:
             action=action,
             from_state=from_state,
             to_state=to_state,
-            details=details
+            details=details,
         )
         db.add(log_entry)

@@ -2,11 +2,10 @@
 Mock Hotel Search Client - Enhanced with more cities and filtering.
 """
 
-from datetime import datetime, timezone
-from typing import List, Optional
+import operator
 import random
 import uuid
-
+from datetime import UTC, datetime
 
 # Hotel chains
 HOTEL_CHAINS = [
@@ -32,10 +31,22 @@ HOTEL_TYPES = [
 ]
 
 AMENITIES = [
-    "Free WiFi", "Free Breakfast", "Pool", "Gym", "Spa",
-    "Restaurant", "Business Center", "Room Service", "Parking",
-    "Airport Shuttle", "Pet Friendly", "Concierge", "Laundry",
-    "Bar/Lounge", "Meeting Rooms", "EV Charging",
+    "Free WiFi",
+    "Free Breakfast",
+    "Pool",
+    "Gym",
+    "Spa",
+    "Restaurant",
+    "Business Center",
+    "Room Service",
+    "Parking",
+    "Airport Shuttle",
+    "Pet Friendly",
+    "Concierge",
+    "Laundry",
+    "Bar/Lounge",
+    "Meeting Rooms",
+    "EV Charging",
 ]
 
 # Major cities with base hotel prices
@@ -55,7 +66,6 @@ CITIES = {
     "orlando": {"country": "US", "base_price": 130},
     "phoenix": {"country": "US", "base_price": 110},
     "houston": {"country": "US", "base_price": 130},
-    
     # International
     "london": {"country": "UK", "base_price": 280},
     "paris": {"country": "FR", "base_price": 260},
@@ -74,18 +84,18 @@ CITIES = {
 }
 
 
-def search_cities(query: str) -> List[dict]:
+def search_cities(query: str) -> list[dict]:
     """Search cities for hotel search autocomplete."""
     query = query.lower().strip()
     results = []
-    
+
     for city, info in CITIES.items():
         if query in city:
             results.append({
                 "city": city.title(),
                 "country": info["country"],
             })
-    
+
     return results[:15]
 
 
@@ -93,95 +103,105 @@ class MockHotelClient:
     """
     Generates realistic mock hotel search results with filtering.
     """
-    
+
     def search_hotels(
         self,
         city: str,
         checkin_date: datetime,
-        checkout_date: Optional[datetime] = None,
+        checkout_date: datetime | None = None,
         guests: int = 1,
         rooms: int = 1,
         # Filters
-        max_price_per_night: Optional[float] = None,
-        min_stars: Optional[int] = None,
-        max_stars: Optional[int] = None,
-        chains: Optional[List[str]] = None,
-        amenities: Optional[List[str]] = None,
+        max_price_per_night: float | None = None,
+        min_stars: int | None = None,
+        max_stars: int | None = None,
+        chains: list[str] | None = None,
+        amenities: list[str] | None = None,
         free_cancellation: bool = False,
         breakfast_included: bool = False,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Generate mock hotel offers with filtering.
         """
         city_lower = city.lower().strip()
         city_info = CITIES.get(city_lower, {"country": "US", "base_price": 150})
-        
+
         offers = []
         num_offers = random.randint(10, 20)
-        
+
         # Calculate nights
-        if checkout_date:
-            nights = (checkout_date - checkin_date).days
-        else:
-            nights = 1
+        nights = (checkout_date - checkin_date).days if checkout_date else 1
         nights = max(1, nights)
-        
-        for i in range(num_offers):
+
+        for _i in range(num_offers):
             chain = random.choice(HOTEL_CHAINS)
             hotel_type = random.choice(HOTEL_TYPES)
-            
+
             # Apply chain filter
             if chains and chain["code"] not in chains:
                 continue
-            
+
             # Apply star filter
             if min_stars and hotel_type["stars"] < min_stars:
                 continue
             if max_stars and hotel_type["stars"] > max_stars:
                 continue
-            
+
             # Calculate price
             base_price = city_info["base_price"]
             price_per_night = int(base_price * hotel_type["price_mult"] * random.uniform(0.8, 1.3))
             total_price = price_per_night * nights * rooms
-            
+
             # Apply price filter
             if max_price_per_night and price_per_night > max_price_per_night:
                 continue
-            
+
             # Random amenities
             num_amenities = random.randint(4, 10)
             hotel_amenities = random.sample(AMENITIES, num_amenities)
-            
+
             # Apply amenity filter
-            if amenities:
-                if not all(a in hotel_amenities for a in amenities):
-                    continue
-            
+            if amenities and not all(a in hotel_amenities for a in amenities):
+                continue
+
             # Breakfast filter
             has_breakfast = "Free Breakfast" in hotel_amenities
             if breakfast_included and not has_breakfast:
                 continue
-            
+
             # Room types
-            room_types = ["Standard Room", "Deluxe Room", "Suite", "King Room", "Double Room", "Executive Room"]
+            room_types = [
+                "Standard Room",
+                "Deluxe Room",
+                "Suite",
+                "King Room",
+                "Double Room",
+                "Executive Room",
+            ]
             room_type = random.choice(room_types)
-            
+
             # Cancellation policy
             cancellation = random.choice([
                 "free_cancellation",
                 "non_refundable",
                 "partial_refund",
             ])
-            
+
             # Apply cancellation filter
             if free_cancellation and cancellation != "free_cancellation":
                 continue
-            
+
             # Location within city
-            locations = ["Downtown", "Airport", "Central", "Plaza", "Business District", "Waterfront"]
+            locations = [
+                "Downtown",
+                "Airport",
+                "Central",
+                "Plaza",
+                "Business District",
+                "Waterfront",
+            ]
             location = random.choice(locations)
-            
+
             offer = {
                 "id": f"hotel_{uuid.uuid4().hex[:12]}",
                 "supplier": "mock",
@@ -202,18 +222,20 @@ class MockHotelClient:
                 "amenities": hotel_amenities,
                 "cancellation_policy": cancellation,
                 "checkin_date": checkin_date.isoformat(),
-                "checkout_date": (checkin_date.replace(day=checkin_date.day + nights)).isoformat() if checkout_date is None else checkout_date.isoformat(),
+                "checkout_date": (checkin_date.replace(day=checkin_date.day + nights)).isoformat()
+                if checkout_date is None
+                else checkout_date.isoformat(),
                 "rating": round(random.uniform(3.5, 5.0), 1),
                 "review_count": random.randint(50, 3000),
                 "distance_to_center": round(random.uniform(0.1, 10.0), 1),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }
-            
+
             offers.append(offer)
-        
+
         # Sort by total price
-        offers.sort(key=lambda x: x["total_price"])
-        
+        offers.sort(key=operator.itemgetter("total_price"))
+
         return offers
 
 

@@ -5,25 +5,29 @@ Integrates with All Aboard European rail booking API (GraphQL).
 Docs: https://docs.allaboard.eu/
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Any, List
 
 from app.api import deps
-from app.db.session import get_db
-from app.models.employee import Employee
 from app.core.access_control import AccessControl
 from app.core.config import settings
-from app.services.suppliers.allaboard_client import get_allaboard_client, AllAboardAPIError
-from app.schemas.train import (
-    StationSearchResponse, Station,
-    TrainSearchRequest, TrainSearchResponse,
-    OfferRequest, OfferResponse,
-    CreateBookingRequest, UpdateBookingRequest, Booking,
-    CreateOrderRequest, Order,
-    PassengerInput, PassengerDetails
-)
 from app.core.rate_limit import limiter
+from app.db.session import get_db
+from app.models.employee import Employee
+from app.schemas.train import (
+    Booking,
+    CreateBookingRequest,
+    OfferRequest,
+    OfferResponse,
+    Order,
+    StationSearchResponse,
+    TrainSearchRequest,
+    TrainSearchResponse,
+    UpdateBookingRequest,
+)
+from app.services.suppliers.allaboard_client import AllAboardAPIError, get_allaboard_client
 
 router = APIRouter()
 
@@ -38,11 +42,14 @@ async def get_train_api_status(request: Request) -> Any:
         "provider": "All Aboard",
         "mode": "TEST" if settings.ALLABOARD_USE_TEST else "PRODUCTION",
         "api_key_configured": bool(settings.ALLABOARD_API_KEY),
-        "base_url": "test.api-gateway.allaboard.eu" if settings.ALLABOARD_USE_TEST else settings.ALLABOARD_BASE_URL
+        "base_url": "test.api-gateway.allaboard.eu"
+        if settings.ALLABOARD_USE_TEST
+        else settings.ALLABOARD_BASE_URL,
     }
 
 
 # ==================== Station Search ====================
+
 
 @router.get("/stations", response_model=StationSearchResponse)
 @limiter.limit("60/minute")
@@ -53,18 +60,18 @@ async def search_stations(
 ) -> Any:
     """
     Search for train stations by name or city.
-    
+
     Returns matching stations with UIDs for use in journey search.
     """
     try:
         client = get_allaboard_client()
-        response = await client.search_stations(q)
-        return response
+        return await client.search_stations(q)
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
 
 # ==================== Journey Search ====================
+
 
 @router.post("/search", response_model=TrainSearchResponse)
 @limiter.limit("20/minute")
@@ -76,13 +83,13 @@ async def search_journeys(
 ) -> Any:
     """
     Search for train journeys between two stations.
-    
+
     Provide:
     - origin: Station UID (from /stations search)
     - destination: Station UID
     - departure_date: Date of travel
     - passengers: List of passenger types (ADULT, YOUTH, SENIOR)
-    
+
     Returns available train connections.
     """
     try:
@@ -91,25 +98,26 @@ async def search_journeys(
             origin=request_in.origin,
             destination=request_in.destination,
             departure_date=request_in.departure_date,
-            passengers=request_in.passengers
+            passengers=request_in.passengers,
         )
-        
+
         # Tag journeys with policy status
-        ac = AccessControl(current_user)
+        AccessControl(current_user)
         for journey in response.journeys:
             # Simple policy: more than 2 changes may need approval
             if journey.changes > 2:
                 journey.policy_status = "warning"
             else:
                 journey.policy_status = "compliant"
-        
+
         return response
-        
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
 
 # ==================== Offers ====================
+
 
 @router.post("/offers", response_model=OfferResponse)
 @limiter.limit("20/minute")
@@ -121,7 +129,7 @@ async def get_journey_offers(
 ) -> Any:
     """
     Get offers/pricing for a specific journey.
-    
+
     Returns available ticket options with prices and conditions.
     """
     try:
@@ -129,28 +137,29 @@ async def get_journey_offers(
         response = await client.get_journey_offers(
             journey_uid=request_in.journey_uid,
             passengers=request_in.passengers,
-            currency=request_in.currency
+            currency=request_in.currency,
         )
-        
+
         # Tag offers with policy status based on class
         ac = AccessControl(current_user)
         for offer in response.offers:
             # Check travel class eligibility
-            if offer.service_class.value in ["HIGH", "BEST"]:
+            if offer.service_class.value in {"HIGH", "BEST"}:
                 if ac.can("first_class") or ac.can("business_class"):
                     offer.policy_status = "compliant"
                 else:
                     offer.policy_status = "violation"
             else:
                 offer.policy_status = "compliant"
-        
+
         return response
-        
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
 
 # ==================== Booking ====================
+
 
 @router.post("/book", response_model=Booking)
 @limiter.limit("20/minute")
@@ -162,23 +171,21 @@ async def create_booking(
 ) -> Any:
     """
     Create a train booking from an offer.
-    
+
     Returns a booking with UID and required passenger fields.
     """
     ac = AccessControl(current_user)
-    
+
     # Check permission (reuse book_flights or add book_trains)
     if not (ac.can("book_flights") or ac.can("book_ground")):
         raise HTTPException(
-            status_code=403,
-            detail="You don't have permission to book train travel"
+            status_code=403, detail="You don't have permission to book train travel"
         )
-    
+
     try:
         client = get_allaboard_client()
-        booking = await client.create_booking(request_in.offer_uid)
-        return booking
-        
+        return await client.create_booking(request_in.offer_uid)
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
@@ -193,19 +200,19 @@ async def update_booking(
 ) -> Any:
     """
     Update booking with passenger details.
-    
+
     One passenger must have isContactPerson=true with email and phone.
     """
     try:
         client = get_allaboard_client()
-        booking = await client.update_booking(booking_uid, request_in.passengers)
-        return booking
-        
+        return await client.update_booking(booking_uid, request_in.passengers)
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
 
 # ==================== Order ====================
+
 
 @router.post("/booking/{booking_uid}/confirm", response_model=Order)
 @limiter.limit("20/minute")
@@ -216,14 +223,13 @@ async def create_order(
 ) -> Any:
     """
     Create an order (pre-book/hold tickets).
-    
+
     This reserves the tickets but doesn't issue them yet.
     """
     try:
         client = get_allaboard_client()
-        order = await client.create_order(booking_uid)
-        return order
-        
+        return await client.create_order(booking_uid)
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
@@ -237,14 +243,13 @@ async def finalize_order(
 ) -> Any:
     """
     Finalize order and issue tickets.
-    
+
     Returns the order with ticket PDFs and check-in URLs.
     """
     try:
         client = get_allaboard_client()
-        order = await client.finalize_order(order_uid)
-        return order
-        
+        return await client.finalize_order(order_uid)
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
@@ -261,8 +266,7 @@ async def get_order(
     """
     try:
         client = get_allaboard_client()
-        order = await client.get_order(order_uid)
-        return order
-        
+        return await client.get_order(order_uid)
+
     except AllAboardAPIError as e:
         raise HTTPException(status_code=404, detail=e.message)

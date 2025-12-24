@@ -1,5 +1,3 @@
-
-
 # Python
 __pycache__/
 *.pyc
@@ -11,7 +9,7 @@ venv/
 .venv/
 pip-log.txt
 pip-delete-this-directory.txt
-
+/SECURITY_AUDIT.md
 # Environments
 .env
 .env.local
@@ -35,3 +33,19 @@ logs/
 # OS specific
 .DS_Store
 Thumbs.db
+.clinerules/byterover-rules.md
+.kilocode/rules/byterover-rules.md
+.roo/rules/byterover-rules.md
+.windsurf/rules/byterover-rules.md
+.cursor/rules/byterover-rules.mdc
+.kiro/steering/byterover-rules.md
+.qoder/rules/byterover-rules.md
+.augment/rules/byterover-rules.md
+# Local documentation (backend only)
+backend/RUFF_USAGE.md
+backend/SECURITY_AUDIT.md
+backend/SECURITY_PRODUCTION_ANALYSIS.md
+backend/ACTUAL_SECURITY_ANALYSIS.md
+
+# Ruff cache
+backend/.ruff_cache/

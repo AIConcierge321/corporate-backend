@@ -1,7 +1,9 @@
+import logging
+
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError, TimeoutError
+
 from app.core.config import settings
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +11,7 @@ logger = logging.getLogger(__name__)
 class RedisService:
     """
     Production-ready Redis service with connection pooling and health checks.
-    
+
     MED-002: Enhanced with:
     - Connection pool configuration
     - Health check method
@@ -17,6 +19,7 @@ class RedisService:
     - Connection timeout configuration
     - Proper error handling
     """
+
     _request_client: redis.Redis | None = None
     _connection_pool: redis.ConnectionPool | None = None
 
@@ -28,15 +31,13 @@ class RedisService:
                 cls._connection_pool = redis.ConnectionPool.from_url(
                     settings.REDIS_URL,
                     decode_responses=True,
-                    max_connections=50,              # Maximum connections in pool
-                    retry_on_timeout=True,           # Retry on timeout
-                    socket_connect_timeout=5,        # 5s connection timeout
-                    socket_timeout=5,                # 5s read/write timeout
-                    health_check_interval=30,        # Check connection health every 30s
+                    max_connections=50,  # Maximum connections in pool
+                    retry_on_timeout=True,  # Retry on timeout
+                    socket_connect_timeout=5,  # 5s connection timeout
+                    socket_timeout=5,  # 5s read/write timeout
+                    health_check_interval=30,  # Check connection health every 30s
                 )
-                cls._request_client = redis.Redis(
-                    connection_pool=cls._connection_pool
-                )
+                cls._request_client = redis.Redis(connection_pool=cls._connection_pool)
                 logger.info("Redis client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Redis client: {e}")
@@ -47,7 +48,7 @@ class RedisService:
     async def health_check(cls) -> bool:
         """
         Check if Redis is available.
-        
+
         Returns:
             True if Redis is healthy, False otherwise
         """
@@ -73,7 +74,7 @@ class RedisService:
                 logger.error(f"Error closing Redis client: {e}")
             finally:
                 cls._request_client = None
-        
+
         if cls._connection_pool:
             try:
                 await cls._connection_pool.disconnect()
@@ -87,4 +88,3 @@ class RedisService:
 async def get_redis() -> redis.Redis:
     """Dependency that provides a Redis client."""
     return RedisService.get_client()
-

@@ -8,24 +8,28 @@ Explore business destinations with:
 - Frequent routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Any, List, Optional
+from typing import Any
 
-from app.db.session import get_db
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 from app.api import deps
-from app.models.employee import Employee
 from app.core.rate_limit import limiter
+from app.models.employee import Employee
 from app.schemas.destination import (
-    DestinationSummary, DestinationDetail, DestinationStats,
-    DestinationSearchResponse, FrequentRoute, PreferredHotel,
-    RiskLevel, PresenceType
+    DestinationDetail,
+    DestinationSearchResponse,
+    DestinationStats,
+    DestinationSummary,
+    FrequentRoute,
+    PreferredHotel,
 )
 from app.services.suppliers.destination_data import (
-    DESTINATIONS, REGIONS, FREQUENT_ROUTES,
-    search_destinations, get_destination_stats, get_frequent_routes
+    DESTINATIONS,
+    REGIONS,
+    get_destination_stats,
+    get_frequent_routes,
+    search_destinations,
 )
-
 
 router = APIRouter()
 
@@ -34,14 +38,14 @@ router = APIRouter()
 @limiter.limit("30/minute")
 async def list_destinations(
     request: Request,
-    q: Optional[str] = Query(None, description="Search query"),
-    region: Optional[str] = Query(None, description="Filter by region"),
+    q: str | None = Query(None, description="Search query"),
+    region: str | None = Query(None, description="Filter by region"),
     hubs_only: bool = Query(False, description="Only business hubs"),
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
     List and search destinations with travel intelligence.
-    
+
     **Filters:**
     - q: Search by city or country name
     - region: Filter by region (Europe, Asia Pacific, etc.)
@@ -49,11 +53,10 @@ async def list_destinations(
     """
     results = search_destinations(query=q, region=region, hubs_only=hubs_only)
     stats = get_destination_stats()
-    
+
     # Convert to summary objects
-    destinations = []
-    for r in results:
-        destinations.append(DestinationSummary(
+    destinations = [
+        DestinationSummary(
             id=r["id"],
             city=r["city"],
             country=r["country"],
@@ -70,8 +73,10 @@ async def list_destinations(
             avg_flight_time_minutes=r["avg_flight_time_minutes"],
             preferred_hotels=r["preferred_hotels"],
             is_hub=r.get("is_hub", False),
-        ))
-    
+        )
+        for r in results
+    ]
+
     return DestinationSearchResponse(
         destinations=destinations,
         total_results=len(destinations),
@@ -88,7 +93,7 @@ async def get_stats(
 ) -> Any:
     """
     Get aggregate destination statistics.
-    
+
     Returns:
     - Active destinations count
     - Total preferred hotels
@@ -99,7 +104,7 @@ async def get_stats(
     return DestinationStats(**stats)
 
 
-@router.get("/regions", response_model=List[str])
+@router.get("/regions", response_model=list[str])
 @limiter.limit("60/minute")
 async def list_regions(request: Request) -> Any:
     """
@@ -108,7 +113,7 @@ async def list_regions(request: Request) -> Any:
     return REGIONS
 
 
-@router.get("/routes", response_model=List[FrequentRoute])
+@router.get("/routes", response_model=list[FrequentRoute])
 @limiter.limit("30/minute")
 async def list_frequent_routes(
     request: Request,
@@ -116,7 +121,7 @@ async def list_frequent_routes(
 ) -> Any:
     """
     Get frequently traveled routes with insights.
-    
+
     Shows top routes by volume with:
     - Average price
     - Best carrier
@@ -135,7 +140,7 @@ async def get_destination(
 ) -> Any:
     """
     Get detailed destination information.
-    
+
     Includes:
     - Travel statistics and costs
     - Preferred hotels with negotiated rates
@@ -143,15 +148,13 @@ async def get_destination(
     - Local information (language, timezone, emergency)
     """
     dest = DESTINATIONS.get(destination_id.lower())
-    
+
     if not dest:
         raise HTTPException(status_code=404, detail="Destination not found")
-    
+
     # Build preferred hotels list
-    hotels = [
-        PreferredHotel(**h) for h in dest.get("preferred_hotels_list", [])
-    ]
-    
+    hotels = [PreferredHotel(**h) for h in dest.get("preferred_hotels_list", [])]
+
     return DestinationDetail(
         id=destination_id.lower(),
         city=dest["city"],
@@ -179,7 +182,7 @@ async def get_destination(
     )
 
 
-@router.get("/{destination_id}/hotels", response_model=List[PreferredHotel])
+@router.get("/{destination_id}/hotels", response_model=list[PreferredHotel])
 @limiter.limit("60/minute")
 async def get_destination_hotels(
     request: Request,
@@ -190,9 +193,9 @@ async def get_destination_hotels(
     Get preferred hotels for a destination with negotiated rates.
     """
     dest = DESTINATIONS.get(destination_id.lower())
-    
+
     if not dest:
         raise HTTPException(status_code=404, detail="Destination not found")
-    
+
     hotels = dest.get("preferred_hotels_list", [])
     return [PreferredHotel(**h) for h in hotels]
