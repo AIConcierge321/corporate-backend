@@ -6,7 +6,7 @@ Pagination, sorting, and response wrappers.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -58,7 +58,7 @@ class PaginationMeta(BaseModel):
 T = TypeVar("T")
 
 
-class PaginatedResponse[T](BaseModel):
+class PaginatedResponse(BaseModel, Generic[T]):
     """Generic paginated response wrapper."""
 
     data: list[Any]  # Will be typed T when used
@@ -97,7 +97,7 @@ class CacheControl(BaseModel):
     ttl_seconds: int | None = Field(None, description="Time to live in seconds")
 
 
-class CachedResponse[T](BaseModel):
+class CachedResponse(BaseModel, Generic[T]):
     """Response wrapper with cache metadata."""
 
     data: Any  # Will be typed T when used
@@ -150,7 +150,7 @@ class SearchMeta(BaseModel):
     price_range: dict | None = Field(None, description="Min/max prices in results")
 
 
-class PaginatedSearchResponse[T](BaseModel):
+class PaginatedSearchResponse(BaseModel, Generic[T]):
     """Paginated search response with metadata."""
 
     data: list[Any]  # Search results
