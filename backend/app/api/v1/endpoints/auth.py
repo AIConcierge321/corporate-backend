@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db.session import get_db
@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.services import auth_service
 from app.api import deps
 from app.core.permissions import get_permissions_for_groups
+from app.core.rate_limit import limiter
 from typing import Any
 import logging
 
@@ -60,7 +61,9 @@ def _dev_mode_mock_auth(id_token: str) -> dict:
 
 
 @router.post("/sso/callback", response_model=Token)
+@limiter.limit("5/minute")
 async def sso_callback(
+    request: Request,
     sso_in: SSOCallbackRequest,
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -103,7 +106,9 @@ async def sso_callback(
 
 
 @router.get("/me", response_model=EmployeeResponse)
+@limiter.limit("60/minute")
 async def read_users_me(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """

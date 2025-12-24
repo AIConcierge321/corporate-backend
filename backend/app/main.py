@@ -10,11 +10,11 @@ import logging
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.services.redis_client import RedisService
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
-# Rate limiter using remote IP
-limiter = Limiter(key_func=get_remote_address)
+# Rate limiter is now imported from app.core.rate_limit
 
 
 @asynccontextmanager
@@ -52,7 +52,26 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 
-# 3. HTTPS Redirect in production (MED-002)
+# 3. Security Headers Middleware (CRIT-002)
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Critical Security Headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    # HSTS (Production only)
+    if not settings.DEV_MODE:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+    return response
+
+# 4. HTTPS Redirect (Production only)
 if not settings.DEV_MODE:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
     app.add_middleware(HTTPSRedirectMiddleware)

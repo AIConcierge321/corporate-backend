@@ -9,6 +9,7 @@ from app.models.employee import Employee
 from app.models.organization import Organization
 from app.models.scim_token import ScimToken
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from typing import Any, Optional
 import logging
 
@@ -83,6 +84,7 @@ async def validate_scim_token(
 
 
 @router.post("/Users", status_code=201)
+@limiter.limit("100/hour")
 async def create_scim_user(
     user_in: SCIMUserCreate,
     request: Request,

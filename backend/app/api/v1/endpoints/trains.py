@@ -5,7 +5,7 @@ Integrates with All Aboard European rail booking API (GraphQL).
 Docs: https://docs.allaboard.eu/
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, List
 
@@ -23,12 +23,14 @@ from app.schemas.train import (
     CreateOrderRequest, Order,
     PassengerInput, PassengerDetails
 )
+from app.core.rate_limit import limiter
 
 router = APIRouter()
 
 
 @router.get("/status")
-async def get_train_api_status() -> Any:
+@limiter.limit("60/minute")
+async def get_train_api_status(request: Request) -> Any:
     """
     Get train API status (test vs production).
     """
@@ -43,7 +45,9 @@ async def get_train_api_status() -> Any:
 # ==================== Station Search ====================
 
 @router.get("/stations", response_model=StationSearchResponse)
+@limiter.limit("60/minute")
 async def search_stations(
+    request: Request,
     q: str = Query(..., min_length=2, description="Station name or city"),
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -63,8 +67,10 @@ async def search_stations(
 # ==================== Journey Search ====================
 
 @router.post("/search", response_model=TrainSearchResponse)
+@limiter.limit("20/minute")
 async def search_journeys(
-    request: TrainSearchRequest,
+    request: Request,
+    request_in: TrainSearchRequest,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -82,10 +88,10 @@ async def search_journeys(
     try:
         client = get_allaboard_client()
         response = await client.search_journeys(
-            origin=request.origin,
-            destination=request.destination,
-            departure_date=request.departure_date,
-            passengers=request.passengers
+            origin=request_in.origin,
+            destination=request_in.destination,
+            departure_date=request_in.departure_date,
+            passengers=request_in.passengers
         )
         
         # Tag journeys with policy status
@@ -106,8 +112,10 @@ async def search_journeys(
 # ==================== Offers ====================
 
 @router.post("/offers", response_model=OfferResponse)
+@limiter.limit("20/minute")
 async def get_journey_offers(
-    request: OfferRequest,
+    request: Request,
+    request_in: OfferRequest,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -119,9 +127,9 @@ async def get_journey_offers(
     try:
         client = get_allaboard_client()
         response = await client.get_journey_offers(
-            journey_uid=request.journey_uid,
-            passengers=request.passengers,
-            currency=request.currency
+            journey_uid=request_in.journey_uid,
+            passengers=request_in.passengers,
+            currency=request_in.currency
         )
         
         # Tag offers with policy status based on class
@@ -145,8 +153,10 @@ async def get_journey_offers(
 # ==================== Booking ====================
 
 @router.post("/book", response_model=Booking)
+@limiter.limit("20/minute")
 async def create_booking(
-    request: CreateBookingRequest,
+    request: Request,
+    request_in: CreateBookingRequest,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -166,7 +176,7 @@ async def create_booking(
     
     try:
         client = get_allaboard_client()
-        booking = await client.create_booking(request.offer_uid)
+        booking = await client.create_booking(request_in.offer_uid)
         return booking
         
     except AllAboardAPIError as e:
@@ -174,9 +184,11 @@ async def create_booking(
 
 
 @router.put("/booking/{booking_uid}", response_model=Booking)
+@limiter.limit("20/minute")
 async def update_booking(
+    request: Request,
     booking_uid: str,
-    request: UpdateBookingRequest,
+    request_in: UpdateBookingRequest,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
@@ -186,7 +198,7 @@ async def update_booking(
     """
     try:
         client = get_allaboard_client()
-        booking = await client.update_booking(booking_uid, request.passengers)
+        booking = await client.update_booking(booking_uid, request_in.passengers)
         return booking
         
     except AllAboardAPIError as e:
@@ -196,7 +208,9 @@ async def update_booking(
 # ==================== Order ====================
 
 @router.post("/booking/{booking_uid}/confirm", response_model=Order)
+@limiter.limit("20/minute")
 async def create_order(
+    request: Request,
     booking_uid: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -215,7 +229,9 @@ async def create_order(
 
 
 @router.post("/order/{order_uid}/finalize", response_model=Order)
+@limiter.limit("10/minute")
 async def finalize_order(
+    request: Request,
     order_uid: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -234,7 +250,9 @@ async def finalize_order(
 
 
 @router.get("/order/{order_uid}", response_model=Order)
+@limiter.limit("60/minute")
 async def get_order(
+    request: Request,
     order_uid: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:

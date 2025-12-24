@@ -8,7 +8,7 @@ Production-ready features:
 - Proper async patterns
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, List, Optional
 import time
@@ -29,6 +29,7 @@ from app.schemas.common import (
 )
 from app.services.search_service import SearchService
 from app.services.cache_service import get_cache_service, CacheService
+from app.core.rate_limit import limiter
 
 
 router = APIRouter()
@@ -43,8 +44,10 @@ class FlightSearchWithPagination(FlightSearchRequest):
 
 
 @router.post("/flights", response_model=PaginatedSearchResponse)
+@limiter.limit("10/minute")
 async def search_flights(
-    request: FlightSearchRequest,
+    request: Request,
+    request_in: FlightSearchRequest,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     current_user: Employee = Depends(deps.get_current_user),
@@ -79,11 +82,11 @@ async def search_flights(
     
     # Generate cache key
     cache_key = CacheService.flight_search_key(
-        origin=request.origin,
-        destination=request.destination,
-        date=str(request.departure_date),
-        passengers=request.passengers,
-        cabin=request.cabin_class.value,
+        origin=request_in.origin,
+        destination=request_in.destination,
+        date=str(request_in.departure_date),
+        passengers=request_in.passengers,
+        cabin=request_in.cabin_class.value,
         page=page
     )
     
@@ -148,8 +151,10 @@ async def search_flights(
 # ==================== Hotel Search ====================
 
 @router.post("/hotels", response_model=PaginatedSearchResponse)
+@limiter.limit("10/minute")
 async def search_hotels(
-    request: HotelSearchRequest,
+    request: Request,
+    request_in: HotelSearchRequest,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     current_user: Employee = Depends(deps.get_current_user),
@@ -184,13 +189,13 @@ async def search_hotels(
     search_id = str(uuid.uuid4())
     
     # Generate cache key
-    checkout = str(request.checkout_date) if request.checkout_date else "none"
+    checkout = str(request_in.checkout_date) if request_in.checkout_date else "none"
     cache_key = CacheService.hotel_search_key(
-        city=request.city,
-        checkin=str(request.checkin_date),
+        city=request_in.city,
+        checkin=str(request_in.checkin_date),
         checkout=checkout,
-        guests=request.guests,
-        rooms=request.rooms,
+        guests=request_in.guests,
+        rooms=request_in.rooms,
         page=page
     )
     
@@ -254,7 +259,9 @@ async def search_hotels(
 # ==================== Autocomplete / Lookup ====================
 
 @router.get("/airports", response_model=List[AirportInfo])
+@limiter.limit("30/minute")
 async def search_airports(
+    request: Request,
     q: str = Query(..., min_length=1, description="Search query (city, airport code, or name)"),
     hubs_only: bool = Query(False, description="Only show business hub airports"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results")
@@ -290,7 +297,9 @@ async def search_airports(
 
 
 @router.get("/cities", response_model=List[CityInfo])
+@limiter.limit("30/minute")
 async def search_cities(
+    request: Request,
     q: str = Query(..., min_length=1, description="Search query (city name)"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results")
 ) -> Any:
@@ -320,7 +329,8 @@ async def search_cities(
 
 
 @router.get("/airlines", response_model=List[AirlineInfo])
-async def list_airlines() -> Any:
+@limiter.limit("60/minute")
+async def list_airlines(request: Request) -> Any:
     """
     List all available airlines for filtering.
     
@@ -346,7 +356,8 @@ async def list_airlines() -> Any:
 
 
 @router.get("/hotel-chains", response_model=List[HotelChainInfo])
-async def list_hotel_chains() -> Any:
+@limiter.limit("60/minute")
+async def list_hotel_chains(request: Request) -> Any:
     """
     List all available hotel chains for filtering.
     
@@ -372,7 +383,8 @@ async def list_hotel_chains() -> Any:
 
 
 @router.get("/amenities", response_model=List[str])
-async def list_amenities() -> Any:
+@limiter.limit("60/minute")
+async def list_amenities(request: Request) -> Any:
     """
     List all available hotel amenities for filtering.
     
@@ -398,7 +410,9 @@ async def list_amenities() -> Any:
 # ==================== Cache Management ====================
 
 @router.delete("/cache", include_in_schema=False)
+@limiter.limit("5/minute")
 async def clear_search_cache(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user)
 ) -> Any:
     """

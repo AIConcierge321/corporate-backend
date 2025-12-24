@@ -4,7 +4,7 @@ Approval API Endpoints
 Handles approval workflow with role-based permissions.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Any
@@ -18,13 +18,16 @@ from app.models.employee import Employee
 from app.schemas.approval import ApprovalRequestResponse, ApprovalAction
 from app.services.booking_workflow import BookingStateMachine
 from app.core.access_control import AccessControl
+from app.core.rate_limit import limiter
 
 router = APIRouter()
 
 
 @router.get("/inbox", response_model=List[ApprovalRequestResponse])
 @router.get("/pending", response_model=List[ApprovalRequestResponse])
+@limiter.limit("30/minute")
 async def list_pending_approvals(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -47,7 +50,9 @@ async def list_pending_approvals(
 
 
 @router.post("/{approval_id}/approve", response_model=ApprovalRequestResponse)
+@limiter.limit("20/minute")
 async def approve_request(
+    request: Request,
     approval_id: uuid.UUID,
     action: ApprovalAction,
     current_user: Employee = Depends(deps.get_current_user),
@@ -100,7 +105,9 @@ async def approve_request(
 
 
 @router.post("/{approval_id}/reject", response_model=ApprovalRequestResponse)
+@limiter.limit("20/minute")
 async def reject_request(
+    request: Request,
     approval_id: uuid.UUID,
     action: ApprovalAction,
     current_user: Employee = Depends(deps.get_current_user),

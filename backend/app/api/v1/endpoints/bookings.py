@@ -8,7 +8,7 @@ Supports:
 - View individual bookings
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -23,12 +23,15 @@ from app.models.employee import Employee
 from app.schemas.booking import BookingCreate, BookingResponse
 from app.services.booking_service import get_bookable_employees, check_can_book_for
 from app.core.access_control import AccessControl, get_accessible_employee_ids_with_groups
+from app.core.rate_limit import limiter
 
 router = APIRouter()
 
 
 @router.post("/draft", response_model=BookingResponse)
+@limiter.limit("20/minute")
 async def create_booking_draft(
+    request: Request,
     booking_in: BookingCreate,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -95,7 +98,9 @@ async def create_booking_draft(
 
 
 @router.get("/", response_model=List[BookingResponse])
+@limiter.limit("30/minute")
 async def list_bookings(
+    request: Request,
     status: Optional[BookingStatus] = None,
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
@@ -154,7 +159,9 @@ async def list_bookings(
 
 
 @router.get("/{booking_id}", response_model=BookingResponse)
+@limiter.limit("60/minute")
 async def get_booking(
+    request: Request,
     booking_id: uuid.UUID,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -200,7 +207,9 @@ async def get_booking(
 
 
 @router.post("/{booking_id}/submit", response_model=BookingResponse)
+@limiter.limit("20/minute")
 async def submit_booking(
+    request: Request,
     booking_id: uuid.UUID,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -244,7 +253,9 @@ async def submit_booking(
 
 
 @router.get("/me/bookable-employees")
+@limiter.limit("30/minute")
 async def get_my_bookable_employees(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:

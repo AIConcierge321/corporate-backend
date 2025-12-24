@@ -8,7 +8,7 @@ Role Management API Endpoints
 SECURITY: Template and assignment mutations require 'manage_roles' permission.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -27,6 +27,7 @@ from app.schemas.role import (
     AccessScopeEnum
 )
 from app.core.access_control import AccessControl
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,8 @@ def _require_manage_roles(current_user: Employee) -> None:
 # ==================== Permissions ====================
 
 @router.get("/permissions", response_model=AvailablePermissionsResponse)
-async def list_available_permissions() -> Any:
+@limiter.limit("60/minute")
+async def list_available_permissions(request: Request) -> Any:
     """
     List all available permissions grouped by category.
     """
@@ -92,7 +94,9 @@ async def list_available_permissions() -> Any:
 # ==================== Role Templates ====================
 
 @router.get("/templates", response_model=RoleTemplateList)
+@limiter.limit("30/minute")
 async def list_role_templates(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -110,7 +114,9 @@ async def list_role_templates(
 
 
 @router.post("/templates", response_model=RoleTemplateResponse, status_code=201)
+@limiter.limit("10/minute")
 async def create_role_template(
+    request: Request,
     template_in: RoleTemplateCreate,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -147,7 +153,9 @@ async def create_role_template(
 
 
 @router.get("/templates/{template_id}", response_model=RoleTemplateResponse)
+@limiter.limit("60/minute")
 async def get_role_template(
+    request: Request,
     template_id: UUID,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -171,7 +179,9 @@ async def get_role_template(
 
 
 @router.put("/templates/{template_id}", response_model=RoleTemplateResponse)
+@limiter.limit("10/minute")
 async def update_role_template(
+    request: Request,
     template_id: UUID,
     template_in: RoleTemplateUpdate,
     current_user: Employee = Depends(deps.get_current_user),
@@ -219,7 +229,9 @@ async def update_role_template(
 
 
 @router.delete("/templates/{template_id}", status_code=204)
+@limiter.limit("10/minute")
 async def delete_role_template(
+    request: Request,
     template_id: UUID,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -250,7 +262,9 @@ async def delete_role_template(
 # ==================== Role Assignments ====================
 
 @router.post("/assign", response_model=RoleAssignmentResponse, status_code=201)
+@limiter.limit("20/minute")
 async def assign_role(
+    request: Request,
     assignment_in: RoleAssignmentCreate,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -318,7 +332,9 @@ async def assign_role(
 
 
 @router.get("/assignments/{employee_id}", response_model=EmployeeRolesResponse)
+@limiter.limit("60/minute")
 async def get_employee_roles(
+    request: Request,
     employee_id: int,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -410,7 +426,9 @@ async def get_employee_roles(
 
 
 @router.delete("/assign/{assignment_id}", status_code=204)
+@limiter.limit("20/minute")
 async def remove_role_assignment(
+    request: Request,
     assignment_id: UUID,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),

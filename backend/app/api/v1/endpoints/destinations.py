@@ -8,13 +8,14 @@ Explore business destinations with:
 - Frequent routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, List, Optional
 
 from app.db.session import get_db
 from app.api import deps
 from app.models.employee import Employee
+from app.core.rate_limit import limiter
 from app.schemas.destination import (
     DestinationSummary, DestinationDetail, DestinationStats,
     DestinationSearchResponse, FrequentRoute, PreferredHotel,
@@ -30,7 +31,9 @@ router = APIRouter()
 
 
 @router.get("/", response_model=DestinationSearchResponse)
+@limiter.limit("30/minute")
 async def list_destinations(
+    request: Request,
     q: Optional[str] = Query(None, description="Search query"),
     region: Optional[str] = Query(None, description="Filter by region"),
     hubs_only: bool = Query(False, description="Only business hubs"),
@@ -78,7 +81,9 @@ async def list_destinations(
 
 
 @router.get("/stats", response_model=DestinationStats)
+@limiter.limit("60/minute")
 async def get_stats(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
@@ -95,7 +100,8 @@ async def get_stats(
 
 
 @router.get("/regions", response_model=List[str])
-async def list_regions() -> Any:
+@limiter.limit("60/minute")
+async def list_regions(request: Request) -> Any:
     """
     List all available regions for filtering.
     """
@@ -103,7 +109,9 @@ async def list_regions() -> Any:
 
 
 @router.get("/routes", response_model=List[FrequentRoute])
+@limiter.limit("30/minute")
 async def list_frequent_routes(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
@@ -119,7 +127,9 @@ async def list_frequent_routes(
 
 
 @router.get("/{destination_id}", response_model=DestinationDetail)
+@limiter.limit("60/minute")
 async def get_destination(
+    request: Request,
     destination_id: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -170,7 +180,9 @@ async def get_destination(
 
 
 @router.get("/{destination_id}/hotels", response_model=List[PreferredHotel])
+@limiter.limit("60/minute")
 async def get_destination_hotels(
+    request: Request,
     destination_id: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:

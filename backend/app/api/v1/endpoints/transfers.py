@@ -5,7 +5,7 @@ Integrates with AirportTransfer.com Partner API.
 Uses mock mode by default, switches to real API when AIRPORT_TRANSFER_API_KEY is set.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, List
 
@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models.employee import Employee
 from app.core.access_control import AccessControl
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.services.transfer_service import get_transfer_client
 from app.schemas.transfer import (
     AirportSearchResult,
@@ -27,7 +28,8 @@ router = APIRouter()
 
 
 @router.get("/status")
-async def get_transfer_api_status() -> Any:
+@limiter.limit("60/minute")
+async def get_transfer_api_status(request: Request) -> Any:
     """
     Get transfer API status (mock vs real).
     """
@@ -52,7 +54,9 @@ async def get_transfer_api_status() -> Any:
 # ==================== Airport Search ====================
 
 @router.get("/airports", response_model=List[AirportSearchResult])
+@limiter.limit("30/minute")
 async def search_airports(
+    request: Request,
     q: str = Query(..., min_length=2, description="Search query (airport name, code, or city)"),
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -69,8 +73,10 @@ async def search_airports(
 # ==================== Quotes ====================
 
 @router.post("/quotes", response_model=TransferQuoteResponse)
+@limiter.limit("20/minute")
 async def get_transfer_quotes(
-    request: TransferQuoteRequest,
+    request: Request,
+    request_in: TransferQuoteRequest,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -96,10 +102,10 @@ async def get_transfer_quotes(
     try:
         client = get_transfer_client()
         response = await client.get_quotes(
-            pickup_location=request.pickup_location,
-            drop_of_location=request.drop_of_location,
-            flight_arrival=request.flight_arrival,
-            travelers=request.travelers
+            pickup_location=request_in.pickup_location,
+            drop_of_location=request_in.drop_of_location,
+            flight_arrival=request_in.flight_arrival,
+            travelers=request_in.travelers
         )
         
         # Tag vehicles with policy status based on price
@@ -119,8 +125,10 @@ async def get_transfer_quotes(
 # ==================== Booking ====================
 
 @router.post("/book", response_model=TransferBookingResponse)
+@limiter.limit("20/minute")
 async def create_transfer_booking(
-    request: TransferBookingRequest,
+    request: Request,
+    request_in: TransferBookingRequest,
     current_user: Employee = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -140,12 +148,12 @@ async def create_transfer_booking(
     try:
         client = get_transfer_client()
         response = await client.create_booking(
-            search_id=request.search_id,
-            vehicle_id=request.vehicle_id,
-            passenger=request.passenger,
-            suitcase=request.suitcase,
-            small_bags=request.small_bags,
-            travel_details=request.travel_details.model_dump() if request.travel_details else None
+            search_id=request_in.search_id,
+            vehicle_id=request_in.vehicle_id,
+            passenger=request_in.passenger,
+            suitcase=request_in.suitcase,
+            small_bags=request_in.small_bags,
+            travel_details=request_in.travel_details.model_dump() if request_in.travel_details else None
         )
         return response
         
@@ -154,7 +162,9 @@ async def create_transfer_booking(
 
 
 @router.get("/booking/{reservation_no}", response_model=TransferBookingDetails)
+@limiter.limit("60/minute")
 async def get_transfer_booking(
+    request: Request,
     reservation_no: str,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
@@ -178,7 +188,9 @@ async def get_transfer_booking(
 # ==================== Cancellation ====================
 
 @router.get("/cancel-reasons", response_model=List[CancelReason])
+@limiter.limit("60/minute")
 async def get_cancel_reasons(
+    request: Request,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
@@ -191,8 +203,10 @@ async def get_cancel_reasons(
 
 
 @router.post("/cancel", response_model=TransferCancelResponse)
+@limiter.limit("10/minute")
 async def cancel_transfer(
-    request: TransferCancelRequest,
+    request: Request,
+    request_in: TransferCancelRequest,
     current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
@@ -203,8 +217,8 @@ async def cancel_transfer(
     try:
         client = get_transfer_client()
         response = await client.cancel_booking(
-            reservation_no=request.reservation_no,
-            cancellation_id=request.cancellation_id
+            reservation_no=request_in.reservation_no,
+            cancellation_id=request_in.cancellation_id
         )
         return response
         
