@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, List, Optional
 import time
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.db.session import get_db
 from app.api import deps
@@ -145,7 +148,21 @@ async def search_flights(
         return response
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        # MED-001: Log full details server-side, return generic message to client
+        logger.error(
+            f"Flight search failed: {e}",
+            exc_info=True,
+            extra={
+                "user_id": current_user.id,
+                "origin": request_in.origin,
+                "destination": request_in.destination,
+                "date": str(request_in.departure_date)
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while searching for flights. Please try again or contact support."
+        )
 
 
 # ==================== Hotel Search ====================
@@ -253,7 +270,21 @@ async def search_hotels(
         return response
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        # MED-001: Log full details server-side, return generic message to client
+        logger.error(
+            f"Hotel search failed: {e}",
+            exc_info=True,
+            extra={
+                "user_id": current_user.id,
+                "city": request_in.city,
+                "checkin": str(request_in.checkin_date),
+                "guests": request_in.guests
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while searching for hotels. Please try again or contact support."
+        )
 
 
 # ==================== Autocomplete / Lookup ====================

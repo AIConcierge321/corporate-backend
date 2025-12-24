@@ -96,8 +96,39 @@ async def create_scim_user(
     
     Token must be valid and associated with an organization.
     """
-    # Organization is now properly scoped via token validation
+    # HIGH-001: Validate emails list exists and is not empty
+    if not user_in.emails or len(user_in.emails) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one email is required"
+        )
+    
     email = user_in.emails[0].value
+    
+    # Validate email format
+    from email_validator import validate_email, EmailNotValidError
+    try:
+        # This validates format and normalizes the email
+        validated = validate_email(email)
+        email = validated.email
+    except EmailNotValidError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid email format: {str(e)}"
+        )
+    
+    # Validate required name fields
+    if not user_in.name:
+        raise HTTPException(
+            status_code=400,
+            detail="Name object is required"
+        )
+    
+    if not user_in.name.givenName or not user_in.name.familyName:
+        raise HTTPException(
+            status_code=400,
+            detail="Given name and family name are required"
+        )
     
     # Check for existing user
     result = await db.execute(select(Employee).where(Employee.email == email))

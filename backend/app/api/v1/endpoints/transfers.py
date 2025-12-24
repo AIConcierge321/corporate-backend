@@ -119,7 +119,18 @@ async def get_transfer_quotes(
         return response
         
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # MED-001: Log full details server-side, return generic message to client
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"Transfer quote search failed: {e}",
+            exc_info=True,
+            extra={"user_id": current_user.id}
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while searching for transfers. Please try again or contact support."
+        )
 
 
 # ==================== Booking ====================

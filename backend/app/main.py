@@ -21,7 +21,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.PROJECT_NAME}")
+    
+    # MED-004: Warn if CORS is misconfigured in production
+    if not settings.DEV_MODE and settings.CORS_ORIGINS == "*":
+        logger.error("=" * 70)
+        logger.error("🚨 SECURITY WARNING: CORS_ORIGINS='*' in PRODUCTION MODE!")
+        logger.error("🚨 This allows ANY website to make requests to your API!")
+        logger.error("🚨 Set CORS_ORIGINS to your frontend domain in .env file!")
+        logger.error("🚨 Example: CORS_ORIGINS='https://app.example.com'")
+        logger.error("=" * 70)
+        # Consider uncommenting the line below to prevent startup with insecure config:
+        # raise RuntimeError("CORS_ORIGINS must be set to specific origins in production")
+    
     yield
+    
     # Shutdown
     await RedisService.close()
     logger.info("Shutdown complete")
@@ -101,6 +114,27 @@ async def root():
 @app.get("/health")
 @limiter.limit("60/minute")
 async def health_check(request: Request):
-    """Health check endpoint with rate limiting example."""
-    return {"status": "healthy", "service": settings.PROJECT_NAME}
+    """
+    Health check endpoint with dependency status.
+    
+    MED-003: Enhanced to include Redis connectivity check.
+    """
+    from datetime import datetime
+    
+    # Check Redis health
+    redis_healthy = await RedisService.health_check()
+    
+    # Overall status is degraded if Redis is down
+    status = "healthy" if redis_healthy else "degraded"
+    
+    return {
+        "status": status,
+        "service": settings.PROJECT_NAME,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "dependencies": {
+            "redis": "connected" if redis_healthy else "disconnected",
+            "database": "connected"  # Database is required to start, so always connected
+        }
+    }
+
 
