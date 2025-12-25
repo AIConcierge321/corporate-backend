@@ -19,6 +19,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "sqlalchemy>=2.0.45",
     "uvicorn>=0.38.0",
+    "websockets>=15.0.1",
 ]
 
 [project.optional-dependencies]

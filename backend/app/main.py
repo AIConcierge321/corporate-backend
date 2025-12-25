@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler as rate_limit_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.api import api_router
@@ -51,7 +51,7 @@ app = FastAPI(
 
 # 1. Rate Limiting
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 # 2. CORS
 origins = settings.CORS_ORIGINS.split(",") if settings.CORS_ORIGINS != "*" else ["*"]
