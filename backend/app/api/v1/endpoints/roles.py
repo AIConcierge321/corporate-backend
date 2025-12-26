@@ -63,7 +63,10 @@ def _require_manage_roles(current_user: Employee) -> None:
 
 @router.get("/permissions", response_model=AvailablePermissionsResponse)
 @limiter.limit("60/minute")
-async def list_available_permissions(request: Request) -> Any:
+async def list_available_permissions(
+    request: Request,
+    current_user: Employee = Depends(deps.get_current_user),
+) -> Any:
     """
     List all available permissions grouped by category.
     """

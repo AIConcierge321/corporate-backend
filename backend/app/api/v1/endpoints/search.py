@@ -296,6 +296,7 @@ async def search_airports(
     q: str = Query(..., min_length=1, description="Search query (city, airport code, or name)"),
     hubs_only: bool = Query(False, description="Only show business hub airports"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results"),
+    current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
     Search airports for flight search autocomplete.
@@ -333,6 +334,7 @@ async def search_cities(
     request: Request,
     q: str = Query(..., min_length=1, description="Search query (city name)"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results"),
+    current_user: Employee = Depends(deps.get_current_user),
 ) -> Any:
     """
     Search cities for hotel search autocomplete.
@@ -361,7 +363,10 @@ async def search_cities(
 
 @router.get("/airlines", response_model=list[AirlineInfo])
 @limiter.limit("60/minute")
-async def list_airlines(request: Request) -> Any:
+async def list_airlines(
+    request: Request,
+    current_user: Employee = Depends(deps.get_current_user),
+) -> Any:
     """
     List all available airlines for filtering.
 
@@ -388,7 +393,10 @@ async def list_airlines(request: Request) -> Any:
 
 @router.get("/hotel-chains", response_model=list[HotelChainInfo])
 @limiter.limit("60/minute")
-async def list_hotel_chains(request: Request) -> Any:
+async def list_hotel_chains(
+    request: Request,
+    current_user: Employee = Depends(deps.get_current_user),
+) -> Any:
     """
     List all available hotel chains for filtering.
 
@@ -415,7 +423,10 @@ async def list_hotel_chains(request: Request) -> Any:
 
 @router.get("/amenities", response_model=list[str])
 @limiter.limit("60/minute")
-async def list_amenities(request: Request) -> Any:
+async def list_amenities(
+    request: Request,
+    current_user: Employee = Depends(deps.get_current_user),
+) -> Any:
     """
     List all available hotel amenities for filtering.
 

@@ -106,7 +106,10 @@ async def get_stats(
 
 @router.get("/regions", response_model=list[str])
 @limiter.limit("60/minute")
-async def list_regions(request: Request) -> Any:
+async def list_regions(
+    request: Request,
+    current_user: Employee = Depends(deps.get_current_user),
+) -> Any:
     """
     List all available regions for filtering.
     """
